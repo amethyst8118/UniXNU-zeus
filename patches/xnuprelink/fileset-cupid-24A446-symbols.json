@@ -1074,6 +1074,13 @@
       "original_sha256": "554cad720dae040b68645cc650cd25803884dea5d37bdff81b19a0081d124284",
       "native_symbol": "_pmap_free_reserved_ppl_page",
       "evidence": "Names itself \"pmap_free_reserved_ppl_page\" in \"%s: function not supported in this environment\" from pmap.c. The native non-PPL pmap implements the same exported KPI as a no-op. Source: osfmk/arm/pmap/pmap.c, config/Private.exports. Retargeted from the iPad 24A446 fixture by shape 1.00."
+    },
+    {
+      "original": "0xfffffff00ac475f4",
+      "original_size": 80,
+      "original_sha256": "23128e7c8529c846918e9ae9f51452820bf7eb733f1ef18a81849f6145d68321",
+      "native_symbol": "_zfree",
+      "evidence": "APFS called this original address from the unmapped-call panic 2026-11-14 (APFS __TEXT_EXEC call at 0xfffffff00aa4b7ac, GOT slot 0xfffffff0083d6990). The 80-byte body (ldp x20,x21,[x0]; ldrh w22,[x20,#0x34]; bzero(x1,w22); tail branch to zfree_ext) is instruction-for-instruction identical to native _zfree at 0xfffffff007330128, and the tail target is the already-mapped _zfree_ext. The XnuPrelink map matched zfree_ext and zfree_percpu but missed this local wrapper."
     }
   ],
   "data": [

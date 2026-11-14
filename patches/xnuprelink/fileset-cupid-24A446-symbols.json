@@ -1088,6 +1088,13 @@
       "original_sha256": "771b957e12b31f01c86f56241d7462e1800cdb50913f5b868bbc0e05c5894819",
       "native_symbol": "_cluster_max_io_size",
       "evidence": "Second post-flash APFS unmapped call (panic 2026-11-14 18:27, APFS __TEXT_EXEC call at 0xfffffff00a9c77c8, GOT slot 0xfffffff0083d5d08). Original body switches on w1 (1/2/other), reads mount fields +0x900..+0x90c, clamps the result and returns a max I/O size. It sits immediately before original _cluster_throttle_io_limit (0xfffffff00ad871d8), exactly as native _cluster_max_io_size (0xfffffff0074dc82c) sits before native _cluster_throttle_io_limit (0xfffffff0074dc900). Source: bsd/vfs/vfs_cluster.c. The 4K native implementation replaces the original 16K-page variant for this kernel."
+    },
+    {
+      "original": "0xfffffff00adee60c",
+      "original_size": 84,
+      "original_sha256": "edd372c1874957b42e0e3929423ceebf60f4521c26f5f18d386357bf5409a085",
+      "native_symbol": "_decmpfs_cnode_free",
+      "evidence": "APFS's remaining stubbed target in the prelink report (post-flash boot 2). The original 84-byte body loads the decmpfs_cnode_zone global, zeroes the cnode with bzero, then tail-calls zfree_ext. The map has no original symbol for this outlined body (it jumps from _decmpfs_cnode_alloc 0xadee5f4 to _decmpfs_cnode_init 0xadee660); it is the body of decmpfs_cnode_free. Native _decmpfs_cnode_free (0xfffffff007539d7c) is a thunk that loads the same _decmpfs_cnode_zone and tail-calls _zfree, which performs the same zero+zfree_ext. Source: bsd/vfs/decmpfs.c."
     }
   ],
   "data": [

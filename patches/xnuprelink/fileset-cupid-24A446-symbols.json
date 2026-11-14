@@ -1081,6 +1081,13 @@
       "original_sha256": "23128e7c8529c846918e9ae9f51452820bf7eb733f1ef18a81849f6145d68321",
       "native_symbol": "_zfree",
       "evidence": "APFS called this original address from the unmapped-call panic 2026-11-14 (APFS __TEXT_EXEC call at 0xfffffff00aa4b7ac, GOT slot 0xfffffff0083d6990). The 80-byte body (ldp x20,x21,[x0]; ldrh w22,[x20,#0x34]; bzero(x1,w22); tail branch to zfree_ext) is instruction-for-instruction identical to native _zfree at 0xfffffff007330128, and the tail target is the already-mapped _zfree_ext. The XnuPrelink map matched zfree_ext and zfree_percpu but missed this local wrapper."
+    },
+    {
+      "original": "0xfffffff00ad87160",
+      "original_size": 120,
+      "original_sha256": "771b957e12b31f01c86f56241d7462e1800cdb50913f5b868bbc0e05c5894819",
+      "native_symbol": "_cluster_max_io_size",
+      "evidence": "Second post-flash APFS unmapped call (panic 2026-11-14 18:27, APFS __TEXT_EXEC call at 0xfffffff00a9c77c8, GOT slot 0xfffffff0083d5d08). Original body switches on w1 (1/2/other), reads mount fields +0x900..+0x90c, clamps the result and returns a max I/O size. It sits immediately before original _cluster_throttle_io_limit (0xfffffff00ad871d8), exactly as native _cluster_max_io_size (0xfffffff0074dc82c) sits before native _cluster_throttle_io_limit (0xfffffff0074dc900). Source: bsd/vfs/vfs_cluster.c. The 4K native implementation replaces the original 16K-page variant for this kernel."
     }
   ],
   "data": [

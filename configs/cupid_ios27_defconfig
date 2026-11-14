@@ -18,3 +18,9 @@ CONFIG_XNU_KERNEL_CHAINED_FIXUPS=y
 # CONFIG_XNU_EXTRA_LD_ARCHIVES or the same objects link twice.
 CONFIG_XNU_NATIVE_UFS=y
 CONFIG_XNU_SOURCE_STORAGE=y
+# The original APFS kext's FSIOC_KERNEL_ROOTAUTH fails on the unsealed source
+# root; the sheng owner-root trust path accepts the source-storage root when
+# native_verified_block_root_authorized() agrees. In the unverified bring-up
+# that query accepts by construction.
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y

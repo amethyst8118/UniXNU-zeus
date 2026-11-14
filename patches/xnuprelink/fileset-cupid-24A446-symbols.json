@@ -1095,6 +1095,13 @@
       "original_sha256": "edd372c1874957b42e0e3929423ceebf60f4521c26f5f18d386357bf5409a085",
       "native_symbol": "_decmpfs_cnode_free",
       "evidence": "APFS's remaining stubbed target in the prelink report (post-flash boot 2). The original 84-byte body loads the decmpfs_cnode_zone global, zeroes the cnode with bzero, then tail-calls zfree_ext. The map has no original symbol for this outlined body (it jumps from _decmpfs_cnode_alloc 0xadee5f4 to _decmpfs_cnode_init 0xadee660); it is the body of decmpfs_cnode_free. Native _decmpfs_cnode_free (0xfffffff007539d7c) is a thunk that loads the same _decmpfs_cnode_zone and tail-calls _zfree, which performs the same zero+zfree_ext. Source: bsd/vfs/decmpfs.c."
+    },
+    {
+      "original": "0xfffffff00abd0d50",
+      "original_size": 80,
+      "original_sha256": "8ec1eecfe1d351fd1282d894352b3657363bb72352c7a5b4fdc5b9cf1b2e7b68",
+      "native_symbol": "_zfree",
+      "evidence": "Post-owner-trust boot panic 2026-11-14 19:58: AMFI and IOSurface called the second original copy of the kernel _zfree wrapper at 0xfffffff00abd0d50 (same 80-byte body as 0xfffffff00ac475f4 but with its own branch displacements). It loads the zone/object, bzeroes the requested bytes and tail-branches to zfree_ext. Bind this copy to the same native _zfree (0xfffffff007330128)."
     }
   ],
   "data": [

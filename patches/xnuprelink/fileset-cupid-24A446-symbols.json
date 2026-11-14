@@ -1102,6 +1102,13 @@
       "original_sha256": "8ec1eecfe1d351fd1282d894352b3657363bb72352c7a5b4fdc5b9cf1b2e7b68",
       "native_symbol": "_zfree",
       "evidence": "Post-owner-trust boot panic 2026-11-14 19:58: AMFI and IOSurface called the second original copy of the kernel _zfree wrapper at 0xfffffff00abd0d50 (same 80-byte body as 0xfffffff00ac475f4 but with its own branch displacements). It loads the zone/object, bzeroes the requested bytes and tail-branches to zfree_ext. Bind this copy to the same native _zfree (0xfffffff007330128)."
+    },
+    {
+      "original": "0xfffffff00b0dd71c",
+      "original_size": 120,
+      "original_sha256": "1464e4dd2a79f82931b0f0c2e6d234cf464dcbde62e587c76d48b5d82772dfcc",
+      "native_symbol": "_proc_ppid",
+      "evidence": "Post-owner-trust panic 2026-11-14 20:29: sandbox called this via its import stub (AMFI shares the target). The 120-byte body sits between _proc_checkdeadrefs (0xb0dd694) and _proc_original_ppid (0xb0dd794), the source position of proc_ppid, and returns the parent pid after the proc reference checks. Native _proc_ppid is 0xfffffff0077c0ff4. Source: bsd/kern/kern_proc.c."
     }
   ],
   "data": [

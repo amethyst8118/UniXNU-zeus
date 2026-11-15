@@ -62,12 +62,13 @@ jobs:
       - name: Check out the firmware repository
         uses: actions/checkout@v4
         with:
-          repository: obaosp/uefi-cupid
-          path: uefi-cupid
+          repository: amethyst8118/uefi-zeus
+          ref: zeus
+          path: uefi-zeus
           persist-credentials: false
 
       - name: Check out the firmware submodules
-        working-directory: uefi-cupid
+        working-directory: uefi-zeus
         run: |
           git submodule update --init --depth 1 \
             Common/Mu Common/Mu_OEM_Sample Mu_Basecore Silicium-ACPI \
@@ -234,7 +235,7 @@ jobs:
       - name: Build the firmware
         id: firmware
         working-directory: UniXNU
-        run: ./unixnu build firmware -D ../device --uefi ../uefi-cupid
+        run: ./unixnu build firmware -D ../device --uefi ../uefi-zeus
 
       # This repository is public. The payload and boot image carry Apple's
       # prelinked kexts and the phone's platform seed, so they are built only in

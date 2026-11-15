@@ -52,24 +52,22 @@ source = "device:dts/zeus.dts"
 include_dirs = ["soc:dts"]
 
 [firmware]
-# TODO(zeus): no uefi-zeus yet. Stage 0 borrows obaosp/uefi-cupid (same SoC,
-# same ABL handoff), but its framebuffer is 1080x2400; zeus is 1440x3200.
-# Kernel CI does not depend on this. A zeusPkg is phase 3 of the plan.
-# uefi-cupid is the Mu-Silicium fork for this board; the cupidPkg platform is
-# the minimal vendor-HW-off configuration on WaipioPkg (SM8450).
-config = "cupid"
-dsc = "Platforms/Xiaomi/cupidPkg/cupid.dsc"
-fd = "Build/cupidPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+# amethyst8118/uefi-zeus (branch zeus): obaosp's uefi-cupid fork plus zeusPkg,
+# the cupidPkg platform with zeus's 1440x3200 framebuffer and identity.
+# Minimal vendor-HW-off configuration on WaipioPkg (SM8450).
+config = "zeus"
+dsc = "Platforms/Xiaomi/zeusPkg/zeus.dsc"
+fd = "Build/zeusPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
 # Gic-Spurious masks interrupts with no registered handler (as sheng does).
 patches = ["Resources/MuPatches/Gic-Spurious.patch"]
-# Binaries is deliberately absent: cupidPkg runs with CUPID_VENDOR_HW = 0 and
-# needs no stock vendor module. Add it when Binary/cupid is imported.
+# Binaries is deliberately absent: zeusPkg runs with ZEUS_VENDOR_HW = 0 and
+# needs no stock vendor module.
 submodules = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 packages = ["{uefi}", "{uefi}/Platforms/Xiaomi", "{tree}/package", "{tree}/drivers/DarwinBoot", "{edk2}", "{uefi}/Common/Mu", "{uefi}/Common/Mu_OEM_Sample", "{uefi}/Silicon/Qualcomm", "{uefi}/Silicon/Silicium", "{uefi}/Silicium-ACPI", "{uefi}/Silicium-ACPI/Platforms/Xiaomi", "{uefi}/Silicium-ACPI/Silicon/Qualcomm"]
 
 [firmware.defines]
 ENABLE_SECUREBOOT = "1"
-DEVICE_MODEL = "cupid"
+DEVICE_MODEL = "zeus"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
 BUILDID_STRING = "zeus-ios26"

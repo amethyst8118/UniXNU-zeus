@@ -238,16 +238,37 @@ jobs:
         working-directory: UniXNU
         run: ./unixnu build firmware -D ../device --uefi ../uefi-cupid
 
-      - name: Extract the OS trust cache
+      - name: Extract the OS trust caches
         working-directory: UniXNU
-        run: ./unixnu ipsw fetch StaticTrustCache -D ../device
+        run: ./unixnu ipsw fetch StaticTrustCache "Cryptex1,SystemTrustCache" -D ../device
+
+      - name: Bundle the OS trust caches
+        working-directory: UniXNU
+        run: |
+          python3 - <<'PY'
+          import struct
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'scripts')
+          from unixnu.ipsw import im4p_payload
+
+          base = Path('out/ipsw/24A446')
+          static = im4p_payload((base / '043-69909-664.dmg.aea.trustcache').read_bytes())
+          system = im4p_payload((base / '043-68526-711.dmg.aea.trustcache').read_bytes())
+          bundle = struct.pack('<3I', 2, 12, 12 + len(static)) + static + system
+          out = Path('build/cupid-trust.bundle')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_bytes(bundle)
+          print(f'cupid trust bundle: {len(bundle)} bytes')
+          PY
 
       - name: Build the payload
         id: payload
         working-directory: UniXNU
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
-        run: ./unixnu build payload -D ../device --uefi ../uefi-cupid --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID" --trust-cache out/ipsw/24A446/043-69909-664.dmg.aea.trustcache
+        run: ./unixnu build payload -D ../device --uefi ../uefi-cupid --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID" --trust-cache build/cupid-trust.bundle
 
       - name: Build the boot image
         id: bootimg

@@ -8,3 +8,6 @@ timers-avoid-trapped-physical-timer.patch
 ufs-probe.patch
 ufs-smmu.patch
 ufs-read.patch
+
+diag-sysctl-oid.patch
+diag-gate-caller.patch

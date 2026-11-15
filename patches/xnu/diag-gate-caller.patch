@@ -1,0 +1,16 @@
+diff --git a/osfmk/kern/locks.c b/osfmk/kern/locks.c
+index 94a34dc..50cab67 100644
+--- a/osfmk/kern/locks.c
++++ b/osfmk/kern/locks.c
+@@ -2713,9 +2713,9 @@ static void
+ gate_not_closed_panic(gate_t *gate, bool wait)
+ {
+ 	if (wait) {
+-		panic("Trying to wait on a not closed gate %p from current_thread %p", gate, current_thread());
++		panic("Trying to wait on a not closed gate %p from current_thread %p data %lx flags %x ts %p caller %p %p %p %p", gate, current_thread(), gate->gt_data, gate->gt_flags, gate->gt_turnstile, __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2), __builtin_return_address(3));
+ 	} else {
+-		panic("Trying to steal a not closed gate %p from current_thread %p", gate, current_thread());
++		panic("Trying to steal a not closed gate %p from current_thread %p data %lx flags %x ts %p caller %p %p %p %p", gate, current_thread(), gate->gt_data, gate->gt_flags, gate->gt_turnstile, __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2), __builtin_return_address(3));
+ 	}
+ }
+ 

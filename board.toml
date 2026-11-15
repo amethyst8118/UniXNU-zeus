@@ -76,9 +76,9 @@ BUILDID_STRING = "zeus-ios26"
 
 [bootimg]
 dtb = "build/zeus/zeus.dtb"
-# Stock ABL FDT already carries the cont_splash_region on most waipio devices;
-# keep the node here until the live cupid DTB is dumped, then drop it if present.
-dtb_node = [{ path = "/reserved-memory/splash_region", props = [{ name = "label", type = "s", value = "cont_splash_region" }, { name = "reg", type = "x", value = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
+# The zeus live FDT (dts/live/zeus-live.dtb) already carries
+# /reserved-memory/splash_region (cont_splash_region 0xb8000000 + 0x2b00000),
+# so no dtb_node override is added (fdtput refuses an existing node).
 
 [payload]
 volume = "ZEUSESP"

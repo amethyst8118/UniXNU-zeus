@@ -99,15 +99,15 @@
       "original": "0xfffffff00abde90c",
       "original_size": 308,
       "original_sha256": "55e1b5e554730bab36213059f1bc00730d7fd682b6bf63a66b1f6774d4d47e78",
-      "native_symbol": "_unixnu_apple_image4_gate_noop",
-      "evidence": "AppleImage4/Image4 gate lock/unlock body (casa owner/state with magic 0x37ab6fbbf7ab6fbb). It is 13432-specific and accesses the original gate struct; the XnuPrelink map has no native pair. The rest of the lck_mtx_gate family is bound to the native implementation. A no-op lock/unlock is a bring-up workaround for early single-threaded start; port the real owner/state manipulation if contention or gate state errors appear."
+      "native_symbol": "_lck_mtx_gate_try_close",
+      "evidence": "AppleImage4/Image4 gate try-close body for the original 13432 gate struct: it validates gt_flags (0x60000), checks gt_data against magic 0x37ab6fbbf7ab6fbb, and CASes gt_data from 0 to the current thread (tpidr_el1). It returns 0 on success and blocks/returns a status on contention. The native lck_mtx_gate_try_close has the same (lock, gate) ABI: it calls lck_mtx_gate_wait's turnstile setup and then gate_try_close(gate), which performs the same magic/CAS. The previous no-op workaround left the gate open, so the matching gate_wait panicked with data=1 (ILOCK, no holder)."
     },
     {
       "original": "0xfffffff00abdea40",
       "original_size": 284,
       "original_sha256": "5af2096f4fcf9199049a7b876853b33d34e8b8e26d65fe5f492646bb77b8aa73",
-      "native_symbol": "_unixnu_apple_image4_gate_noop",
-      "evidence": "AppleImage4/Image4 gate lock/unlock body (casa owner/state with magic 0x37ab6fbbf7ab6fbb). It is 13432-specific and accesses the original gate struct; the XnuPrelink map has no native pair. The rest of the lck_mtx_gate family is bound to the native implementation. A no-op lock/unlock is a bring-up workaround for early single-threaded start; port the real owner/state manipulation if contention or gate state errors appear."
+      "native_symbol": "_lck_mtx_gate_close",
+      "evidence": "AppleImage4/Image4 blocking gate-close body for the original 13432 gate struct: same gt_flags/magic checks and CAS from 0 to the current thread, but the success path returns void and contention blocks until the gate is closed. The native lck_mtx_gate_close has the same (lock, gate) ABI and calls gate_close(gate) with the same 0x37ab6fbbf7ab6fbb magic. Pair it here instead of the no-op so the AppleImage4 lock/unlock pair and the native gate_wait agree on the holder state."
     },
     {
       "original": "0xfffffff00abdeb5c",

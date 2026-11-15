@@ -236,30 +236,10 @@ jobs:
         working-directory: UniXNU
         run: ./unixnu build firmware -D ../device --uefi ../uefi-cupid
 
-      - name: Build the payload
-        id: payload
-        working-directory: UniXNU
-        env:
-          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
-        run: ./unixnu build payload -D ../device --uefi ../uefi-cupid --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID"
-
-      - name: Build the boot image
-        id: bootimg
-        working-directory: UniXNU
-        run: |
-          ./unixnu bootimg -D ../device --uefi ../uefi-cupid \
-            --dtb ../device/build/zeus/zeus.dtb
-
-      - name: Upload the boot image
-        if: always() && steps.bootimg.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: zeus-bootimg
-          path: |
-            UniXNU/out/zeus/*/*/boot/boot.img
-            UniXNU/out/zeus/*/*/payload/payload.img
-          if-no-files-found: error
-          retention-days: 7
+      # This repository is public. The payload and boot image carry Apple's
+      # prelinked kexts and the phone's platform seed, so they are built only in
+      # the owner's private packaging repository (workflow_dispatch, artifacts
+      # deleted after download). Nothing Apple-derived is uploaded from here.
 
       - name: Collect text logs
         if: always() && steps.status.outcome == 'success'
@@ -299,8 +279,7 @@ jobs:
             echo "| package (UniXNU.efi) | ${{ steps.package.outcome }} |"
             echo "| firmware (SILICIUM_UEFI.fd) | ${{ steps.firmware.outcome }} |"
             echo "| zeus.dtb | ${{ steps.dtb.outcome }} |"
-            echo "| payload.img | ${{ steps.payload.outcome }} |"
-            echo "| boot.img | ${{ steps.bootimg.outcome }} |"
             echo
+            echo "payload.img / boot.img: built in the private packaging repository only."
             echo "iPhone17,2 (D94AP) profile, SM8450 SoC source, zeus defconfig. Text logs only."
           } >> "$GITHUB_STEP_SUMMARY"

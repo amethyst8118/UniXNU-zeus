@@ -238,12 +238,16 @@ jobs:
         working-directory: UniXNU
         run: ./unixnu build firmware -D ../device --uefi ../uefi-cupid
 
+      - name: Extract the OS trust cache
+        working-directory: UniXNU
+        run: ./unixnu ipsw fetch StaticTrustCache -D ../device
+
       - name: Build the payload
         id: payload
         working-directory: UniXNU
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
-        run: ./unixnu build payload -D ../device --uefi ../uefi-cupid --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID"
+        run: ./unixnu build payload -D ../device --uefi ../uefi-cupid --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID" --trust-cache out/ipsw/24A446/043-69909-664.dmg.aea.trustcache
 
       - name: Build the boot image
         id: bootimg

@@ -26,11 +26,18 @@
       "evidence": "A bti c; b thunk whose only call is the paired _uiomove64 (map reference-symbol). Binding the thunk to _uiomove64 preserves the tail call."
     },
     {
+      "original": "0xfffffff00a738b28",
+      "original_size": 184,
+      "original_sha256": "891aa86281603e0708b8d69b31a71b549326eb6da53e07847c96654e76c16ad8",
+      "native_symbol": "_zalloc_ro",
+      "evidence": "zeus 2026-11-16 panic: sandbox called this unmapped function from 0xfffffff00a418688 with x0=0xa (zone id) and x1=0x8004 (Z_ZERO|Z_NOFAIL). The body indexes zone_array (0xb1e7140, stride 0xc0) by zid, calls the zone allocator with (zone, zone->z_stats, flags), then requires the result to be an RO element of zid (same range/size/owner checks as zone_require_ro) else _zone_id_require_ro_panic. That is zalloc_ro(zid, flags); native _zalloc_ro is 0xfffffff00727cf98 (200 bytes)."
+    },
+    {
       "original": "0xfffffff00a738be0",
       "original_size": 128,
       "original_sha256": "f5c6474152312f63da8f4ec0cefec70280c755ef96b65600f8131be641128b5d",
-      "native_symbol": "_zalloc_ro",
-      "evidence": "The original calls the paired _zone_id_require_ro_panic and validates the RO zone id; native _zalloc_ro is the RO allocator and calls the same gate. The native body is larger (ubsan/range checks), so the shape matcher did not pair it; sandbox imports it for 11 sites."
+      "native_symbol": "_zone_require_ro",
+      "evidence": "zeus 2026-11-16: corrected from _zalloc_ro. The body allocates nothing: it checks that the address in x2 lies inside the RO zone range (0x7c8cc08 pair), that its element offset fits the zid's RO element size (table 0x7c92da0) and that the zone metadata owner equals zid, else calls _zone_id_require_ro_panic(zid, addr). That is zone_require_ro(zid, elem_size, addr); native _zone_require_ro is 0xfffffff00727d060."
     },
     {
       "original": "0xfffffff00a712330",

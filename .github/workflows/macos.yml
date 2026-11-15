@@ -1,6 +1,6 @@
 name: macOS kernel build
 
-# Builds the arm64e iOS 26 XNU for cupid on a GitHub macOS runner. This is the
+# Builds the arm64e iOS 26 XNU for zeus on a GitHub macOS runner. This is the
 # reproducible host check while the phone is not attached: it resolves the
 # iOS 26 profile, fetches the pinned sources, decodes the iPhone17,2 kernelcache
 # and prelinks the kernel. It publishes text logs only (no Apple images).
@@ -128,17 +128,17 @@ jobs:
         id: status
         working-directory: UniXNU
         run: |
-          ./unixnu defconfig cupid_ios26_defconfig -D ../device
+          ./unixnu defconfig zeus_ios26_defconfig -D ../device
           ./unixnu fetch -D ../device
           ./unixnu status --json -D ../device | tee "$RUNNER_TEMP/status.json"
           python3 - "$RUNNER_TEMP/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
           text = json.dumps(status)
-          for needle in ("ios-26.5.2-23F84", "arm64e", "sm8450", "cupid_ios26"):
+          for needle in ("ios-26.5.2-23F84", "arm64e", "sm8450", "zeus_ios26"):
               if needle not in text:
                   sys.exit(f"::error::resolved status is missing {needle}")
-          print("status resolves the iOS 26 arm64e profile, the sm8450 source and the cupid defconfig")
+          print("status resolves the iOS 26 arm64e profile, the sm8450 source and the zeus defconfig")
           PY
 
       - name: Install the XnuPrelink reviewed symbols
@@ -154,10 +154,10 @@ jobs:
           install -m 0644 "${fixtures[@]}" kits/XnuPrelink/fixtures/
           python3 -c 'import glob,json; [print("reviewed functions:", len(d["functions"]), "kernelcache:", d["inputs"]["kernelcache_sha256"]) for p in glob.glob("kits/XnuPrelink/fixtures/fileset-cupid-*.json") for d in [json.load(open(p))]]'
 
-      - name: Build the cupid device tree
+      - name: Build the zeus device tree
         id: dtb
         working-directory: device
-        run: scripts/build-cupid-dtb.sh
+        run: scripts/build-zeus-dtb.sh
 
       - name: Build the kernel
         id: kernel
@@ -168,12 +168,12 @@ jobs:
         if: always()
         working-directory: UniXNU
         run: |
-          LOG=$(find out/cupid -name prelink.log | head -1)
+          LOG=$(find out/zeus -name prelink.log | head -1)
           if [ -n "$LOG" ]; then
             echo "== $LOG"
             tail -5 "$LOG"
           fi
-          REPORT=$(find out/cupid -path '*/kernel/kernel.json' | head -1)
+          REPORT=$(find out/zeus -path '*/kernel/kernel.json' | head -1)
           if [ -n "$REPORT" ]; then
           python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));s=d.get("stubbed",{});m=d.get("missing",{});print("allow_missing",d.get("allow_missing"),"mapping_complete",d.get("mapping_complete"));print("stubbed_targets",sum(len(v) for v in s.values()),"sites",sum(sum(v.values()) for v in s.values()));print("missing_targets",sum(len(v) for v in m.values()));[print("owner",k,"stubbed",len(s.get(k,{})),"missing",len(m.get(k,{}))) for k in sorted(set(s)|set(m))]' "$REPORT"
           else
@@ -184,12 +184,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cupid-native-symbols
+          name: zeus-native-symbols
           path: |
-            UniXNU/out/cupid/*/*/tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf
-            UniXNU/out/cupid/*/*/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
-            UniXNU/out/cupid/*/*/kernel/*.json
-            UniXNU/out/cupid/*/*/logs/*.log
+            UniXNU/out/zeus/*/*/tree/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf
+            UniXNU/out/zeus/*/*/tree/build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf
+            UniXNU/out/zeus/*/*/kernel/*.json
+            UniXNU/out/zeus/*/*/logs/*.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -198,7 +198,7 @@ jobs:
         working-directory: UniXNU
         run: |
           export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-          K=$(find out/cupid -path '*/kernel/kernel.macho' | head -1)
+          K=$(find out/zeus -path '*/kernel/kernel.macho' | head -1)
           [ -n "$K" ] || { echo "no kernel.macho"; exit 0; }
           {
             echo "kernel: $K"
@@ -207,7 +207,7 @@ jobs:
             echo "== segments"
             llvm-objdump --macho --private-headers "$K" 2>/dev/null | sed -n '1,90p'
             echo "== prelink counts"
-            find out/cupid -name 'kernel.json' -exec python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sys.argv[1], "stubbed", sum(len(v) for v in d.get("stubbed", {}).values()), "missing", sum(len(v) for v in d.get("missing", {}).values()))' {} \;
+            find out/zeus -name 'kernel.json' -exec python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sys.argv[1], "stubbed", sum(len(v) for v in d.get("stubbed", {}).values()), "missing", sum(len(v) for v in d.get("missing", {}).values()))' {} \;
           } > "$RUNNER_TEMP/kernel-diag.txt" 2>&1
           cat "$RUNNER_TEMP/kernel-diag.txt"
 
@@ -215,7 +215,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cupid-kernel-diag
+          name: zeus-kernel-diag
           path: ${{ runner.temp }}/kernel-diag.txt
           if-no-files-found: warn
           retention-days: 7
@@ -248,16 +248,16 @@ jobs:
         working-directory: UniXNU
         run: |
           ./unixnu bootimg -D ../device --uefi ../uefi-cupid \
-            --dtb ../device/build/cupid/cupid.dtb
+            --dtb ../device/build/zeus/zeus.dtb
 
       - name: Upload the boot image
         if: always() && steps.bootimg.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: cupid-bootimg
+          name: zeus-bootimg
           path: |
-            UniXNU/out/cupid/*/*/boot/boot.img
-            UniXNU/out/cupid/*/*/payload/payload.img
+            UniXNU/out/zeus/*/*/boot/boot.img
+            UniXNU/out/zeus/*/*/payload/payload.img
           if-no-files-found: error
           retention-days: 7
 
@@ -267,22 +267,22 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
           cp "$RUNNER_TEMP/status.json" "$RUNNER_TEMP/logs/" 2>/dev/null || true
-          find out/cupid -type f -name '*.log' -exec cp {} "$RUNNER_TEMP/logs/" \; 2>/dev/null || true
-          find out/cupid -type f -name '*.json' -path '*prelink*' -exec cp {} "$RUNNER_TEMP/logs/" \; 2>/dev/null || true
+          find out/zeus -type f -name '*.log' -exec cp {} "$RUNNER_TEMP/logs/" \; 2>/dev/null || true
+          find out/zeus -type f -name '*.json' -path '*prelink*' -exec cp {} "$RUNNER_TEMP/logs/" \; 2>/dev/null || true
           ls -la "$RUNNER_TEMP/logs"
 
       - name: Upload logs
         if: always() && steps.status.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: cupid-ios26-kernel-logs
+          name: zeus-ios26-kernel-logs
           path: ${{ runner.temp }}/logs/*
           if-no-files-found: warn
           retention-days: 7
 
       - name: Remove Apple inputs
         if: always()
-        run: rm -rf out/ipsw out/feeds device/.cache/firmware out/cupid/*/*/tree/.cache/firmware
+        run: rm -rf out/ipsw out/feeds device/.cache/firmware out/zeus/*/*/tree/.cache/firmware
 
       - name: Summary
         if: always()
@@ -290,7 +290,7 @@ jobs:
           KERNEL: ${{ steps.kernel.outcome }}
         run: |
           {
-            echo "## cupid / iOS 26.5.2 (23F84, arm64e)"
+            echo "## zeus / iOS 26.5.2 (23F84, arm64e)"
             echo
             echo "| Step | Result |"
             echo "| --- | --- |"
@@ -298,9 +298,9 @@ jobs:
             echo "| kernel + prelink | ${KERNEL:-skipped} |"
             echo "| package (UniXNU.efi) | ${{ steps.package.outcome }} |"
             echo "| firmware (SILICIUM_UEFI.fd) | ${{ steps.firmware.outcome }} |"
-            echo "| cupid.dtb | ${{ steps.dtb.outcome }} |"
+            echo "| zeus.dtb | ${{ steps.dtb.outcome }} |"
             echo "| payload.img | ${{ steps.payload.outcome }} |"
             echo "| boot.img | ${{ steps.bootimg.outcome }} |"
             echo
-            echo "iPhone17,2 (D94AP) profile, SM8450 SoC source, cupid defconfig. Text logs only."
+            echo "iPhone17,2 (D94AP) profile, SM8450 SoC source, zeus defconfig. Text logs only."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,9 +1,11 @@
 schema_version = 2
 
 [board]
-name = "cupid"
+name = "zeus"
 soc = "SM8450"
-description = "Xiaomi 12 (cupid)"
+description = "Xiaomi 12 Pro (zeus)"
+# The device package folder keeps cupid's name (kits/cupid); scripts in the
+# assembled tree look it up by that name. The board itself is zeus.
 kit = "cupid"
 soc_source = "sm8450"
 # iPhone-flavoured iOS 26 profile. The profile is shipped in this repository
@@ -12,10 +14,11 @@ soc_source = "sm8450"
 os_profile = "ios-26.5.2-23F84"
 
 [userdata]
-# Measured on the phone (PixelOS, root, 2026-11-07):
-# /dev/block/by-name/userdata -> /dev/block/sda38
-# start 25362432 (512-byte sectors), size 466862040 -> 4096-byte LBA
-# first 3170304, count 58357755, last 61528058.
+# zeus: userdata is /dev/block/sda38 too (Android, 2026-11-16) and fastboot
+# reports 0x37A77FB000 bytes = 58357755 4096-byte LBAs, the same count as cupid.
+# TODO(zeus): the start LBA is cupid's value; confirm in TWRP with
+#   cat /sys/block/sda/sda38/start   (512-byte sectors; divide by 8)
+# before any userdata write. Values below are cupid's (PixelOS, 2026-11-07).
 first_lba = 3170304
 last_lba = 61528058
 lba_bytes = 4096
@@ -27,7 +30,7 @@ lba_bytes = 4096
 include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot"]
 
 [kernel]
-defconfig = "cupid_ios26_defconfig"
+defconfig = "zeus_ios26_defconfig"
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
@@ -45,10 +48,13 @@ patch_series = [
 ]
 
 [device_tree]
-source = "device:dts/cupid.dts"
+source = "device:dts/zeus.dts"
 include_dirs = ["soc:dts"]
 
 [firmware]
+# TODO(zeus): no uefi-zeus yet. Stage 0 borrows obaosp/uefi-cupid (same SoC,
+# same ABL handoff), but its framebuffer is 1080x2400; zeus is 1440x3200.
+# Kernel CI does not depend on this. A zeusPkg is phase 3 of the plan.
 # uefi-cupid is the Mu-Silicium fork for this board; the cupidPkg platform is
 # the minimal vendor-HW-off configuration on WaipioPkg (SM8450).
 config = "cupid"
@@ -66,16 +72,16 @@ ENABLE_SECUREBOOT = "1"
 DEVICE_MODEL = "cupid"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
-BUILDID_STRING = "cupid-ios26"
+BUILDID_STRING = "zeus-ios26"
 
 [bootimg]
-dtb = "build/cupid/cupid.dtb"
+dtb = "build/zeus/zeus.dtb"
 # Stock ABL FDT already carries the cont_splash_region on most waipio devices;
 # keep the node here until the live cupid DTB is dumped, then drop it if present.
 dtb_node = [{ path = "/reserved-memory/splash_region", props = [{ name = "label", type = "s", value = "cont_splash_region" }, { name = "reg", type = "x", value = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
 
 [payload]
-volume = "CUPIDESP"
+volume = "ZEUSESP"
 size_mib = 176
 loader = "firmware"
 title = "iOS 26"
@@ -107,4 +113,4 @@ artwork-display-gamut = "sRGB"
 unixnu = "../UniXNU"
 
 [package.defconfig]
-"ios-26.5.2-23F84" = "cupid_ios26_defconfig"
+"ios-26.5.2-23F84" = "zeus_ios26_defconfig"

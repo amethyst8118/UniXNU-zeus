@@ -46,22 +46,18 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
  }
  
  static void
-@@ -2017,13 +2055,19 @@
+@@ -2017,13 +2055,15 @@
  	const uint64_t panic_options_mask = DEBUGGER_OPTION_INITPROC_PANIC | DEBUGGER_OPTION_USERSPACE_INITIATED_PANIC;
  
  	if (p->p_exit_reason == OS_REASON_NULL) {
 -		panic_with_options(0, NULL, panic_options_mask, "%s -- no exit reason available -- (signal %d, exit status %d %s)",
 -		    prefix_str, WTERMSIG(rv), WEXITSTATUS(rv), ((proc_getcsflags(p) & CS_KILLED) ? "CS_KILLED" : ""));
-+		panic_with_options(0, NULL, panic_options_mask, "%s -- no exit reason available -- (signal %d, exit status %d %s)
-+%s
-+%s",
++		panic_with_options(0, NULL, panic_options_mask, "%s -- no exit reason available -- (signal %d, exit status %d %s)\n%s\n%s",
 +		    prefix_str, WTERMSIG(rv), WEXITSTATUS(rv), ((proc_getcsflags(p) & CS_KILLED) ? "CS_KILLED" : ""),
 +		    (p == initproc) ? zeus_initproc_crash_state() : "", (p == initproc) ? zeus_log_tail() : "");
  	} else {
 -		panic_with_options(0, NULL, panic_options_mask, "%s %s -- exit reason namespace %d subcode 0x%llx description: %." LAUNCHD_PANIC_REASON_STRING_MAXLEN "s",
-+		panic_with_options(0, NULL, panic_options_mask, "%s %s -- exit reason namespace %d subcode 0x%llx description: %." LAUNCHD_PANIC_REASON_STRING_MAXLEN "s
-+%s
-+%s",
++		panic_with_options(0, NULL, panic_options_mask, "%s %s -- exit reason namespace %d subcode 0x%llx description: %." LAUNCHD_PANIC_REASON_STRING_MAXLEN "s\n%s\n%s",
  		    ((proc_getcsflags(p) & CS_KILLED) ? "CS_KILLED" : ""),
  		    prefix_str, p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code,
 -		    exit_reason_desc ? exit_reason_desc : "none");

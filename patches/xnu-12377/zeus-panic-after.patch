@@ -1,7 +1,7 @@
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -171,4 +171,107 @@
+@@ -171,4 +171,117 @@
  #include <sys/fsctl.h>
 
  #include <net/init.h>
@@ -35,27 +35,16 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +	return 0;
 +}
 +
-+static void
-+zeus_panic_after_fire(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
++const char *zeus_log_tail(void);
++
++/* Message buffer, oldest to newest, without the CoreAnalyticsHub nag flood and the sysctl-root lines. */
++const char *
++zeus_log_tail(void)
 +{
 +	struct msgbuf *mb = msgbufp;
 +	char line[200];
-+	size_t ln = 0, n = 0, pn = 0;
-+	int nproc = 0;
-+	proc_t p;
++	size_t ln = 0, n = 0;
 +
-+	/* Processes first: pid:name, as many as fit. */
-+	proc_list_lock();
-+	LIST_FOREACH(p, &allproc, p_list) {
-+		nproc++;
-+		if (pn + 40 < sizeof(zeus_panic_procs)) {
-+			pn += (size_t)snprintf(zeus_panic_procs + pn, sizeof(zeus_panic_procs) - pn,
-+			    "%d:%s ", proc_getpid(p), proc_best_name(p));
-+		}
-+	}
-+	proc_list_unlock();
-+
-+	/* Message buffer, oldest to newest, dropping the CoreAnalyticsHub nag flood. */
 +	if (mb && mb->msg_magic == MSG_MAGIC && mb->msg_bufc && mb->msg_size > 0) {
 +		int size = mb->msg_size;
 +		for (int i = 0; i < size; i++) {
@@ -71,7 +60,8 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +				continue;
 +			}
 +			line[ln] = '\0';
-+			if (ln && !zeus_contains(line, "CoreAnalyticsHub") && !zeus_contains(line, "messageClients")) {
++			if (ln && !zeus_contains(line, "CoreAnalyticsHub") && !zeus_contains(line, "messageClients") &&
++			    !zeus_contains(line, "unixnu-sysctl-root")) {
 +				if (n + ln + 1 >= sizeof(zeus_panic_tail)) {
 +					size_t drop = n + ln + 1 - (sizeof(zeus_panic_tail) - 1);
 +					if (drop > n) {
@@ -88,8 +78,28 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +		}
 +	}
 +	zeus_panic_tail[n] = '\0';
++	return zeus_panic_tail;
++}
++
++static void
++zeus_panic_after_fire(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
++{
++	size_t pn = 0;
++	int nproc = 0;
++	proc_t p;
++
++	/* Processes: pid:name, as many as fit. */
++	proc_list_lock();
++	LIST_FOREACH(p, &allproc, p_list) {
++		nproc++;
++		if (pn + 40 < sizeof(zeus_panic_procs)) {
++			pn += (size_t)snprintf(zeus_panic_procs + pn, sizeof(zeus_panic_procs) - pn,
++			    "%d:%s ", proc_getpid(p), proc_best_name(p));
++		}
++	}
++	proc_list_unlock();
 +	panic("zeus-panic-after=%u rootvnode=%p initproc=%p nproc=%d\nprocs: %s\n%s",
-+	    zeus_panic_after_secs, (void *)rootvnode, (void *)initproc, nproc, zeus_panic_procs, zeus_panic_tail);
++	    zeus_panic_after_secs, (void *)rootvnode, (void *)initproc, nproc, zeus_panic_procs, zeus_log_tail());
 +}
 +
 +static void
@@ -109,7 +119,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +	thread_call_enter_delayed(tc, deadline);
 +}
 
-@@ -799,3 +902,4 @@
+@@ -799,3 +912,4 @@
  	if (&native_source_storage_start)
  		native_source_storage_start();
 +	zeus_panic_after_arm();

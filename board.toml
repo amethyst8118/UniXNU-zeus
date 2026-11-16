@@ -16,11 +16,10 @@ soc_source = "sm8450"
 os_profile = "ios-27.0.1-24A446"
 
 [userdata]
-# zeus: userdata is /dev/block/sda38 too (Android, 2026-11-16) and fastboot
-# reports 0x37A77FB000 bytes = 58357755 4096-byte LBAs, the same count as cupid.
-# TODO(zeus): the start LBA is cupid's value; confirm in TWRP with
-#   cat /sys/block/sda/sda38/start   (512-byte sectors; divide by 8)
-# before any userdata write. Values below are cupid's (PixelOS, 2026-11-07).
+# Measured on zeus (TWRP, root, 2026-11-16): /dev/block/by-name/userdata ->
+# /dev/block/sda38, start 25362432 and size 466862040 512-byte sectors, logical
+# block 4096 -> 4096-byte LBA first 3170304, count 58357755, last 61528058.
+# Identical to cupid's layout.
 first_lba = 3170304
 last_lba = 61528058
 lba_bytes = 4096
@@ -91,11 +90,10 @@ loader = "firmware"
 title = "iOS 27"
 dram_size = "0x80000000"
 panic_screen = true
-# zeus stage 0: cupid's native-source-storage=1 native-ufs-root=1 are left out
-# on purpose, so the kernel cannot take its root from UFS userdata (Android's
-# data is still there). Add them back only after an iOS root image has been
-# written to userdata with the owner's approval.
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "amfi_get_out_of_my_way=1"]
+# UFS root on: the kernel takes its root from the SHNGROOT windows in userdata.
+# With Android data still in userdata the driver only reads the GPT and LBA
+# 3170304 and rejects the missing manifest (cupid notes/ROOT-UFS.md).
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1"]
 
 [payload.adt]
 # SM8450 msm-id 457 (0x1C9), from the vendor DTS qcom,msm-id.

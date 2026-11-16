@@ -20,6 +20,7 @@
 #include <libkern/c++/OSString.h>
 #include <sys/types.h>
 #include <sys/param.h>
+#include <libkern/crypto/sha2.h>
 
 extern "C" {
 int native_ufs_block_authenticates(IOService *provider, const char *uuid, uint8_t *digest);
@@ -32,7 +33,7 @@ static constexpr size_t kDigestBytes = 48;
 
 // 1 when `device` is the only IOMedia with that BSD number and a UFS window
 // below it authenticates the media UUID (and `expectedUUID`, when given).
-static int verifiedVolumeQuery(dev_t device, const char *expectedUUID, uint8_t *manifestDigest)
+__attribute__((unused)) static int verifiedVolumeQuery(dev_t device, const char *expectedUUID, uint8_t *manifestDigest)
 {
     OSDictionary *matching = IOService::serviceMatching("IOMedia");
     OSDictionary *properties = OSDictionary::withCapacity(2);
@@ -83,12 +84,64 @@ extern "C" int native_verified_block_root_authorized(dev_t device)
 #endif
 }
 
+#if !defined(NATIVE_VERIFIED_BLOCK) || !NATIVE_VERIFIED_BLOCK
+// Unverified bring-up: the window carries no owner-signed policy, so there is no
+// signed manifest digest. The owner boot manifest (VerifiedRoot.OwnerBootSet.v1,
+// a synthetic /chosen identity) only needs a stable per-volume value, so use
+// SHA-384("zeus-unverified-window", UUID, media size) for the one IOMedia with
+// this BSD number and UUID. Same trust as native_verified_block_root_authorized()
+// above, which accepts the source root by construction.
+static int unverifiedManifestDigest(dev_t device, const char *expectedUUID, uint8_t digest[48])
+{
+    OSDictionary *matching = IOService::serviceMatching("IOMedia");
+    OSDictionary *properties = OSDictionary::withCapacity(2);
+    OSNumber *mjr = OSNumber::withNumber(static_cast<unsigned>(major(static_cast<uint32_t>(device))), 32);
+    OSNumber *mnr = OSNumber::withNumber(static_cast<unsigned>(minor(static_cast<uint32_t>(device))), 32);
+    bool ready = matching && properties && mjr && mnr &&
+                 properties->setObject(kIOBSDMajorKey, mjr) && properties->setObject(kIOBSDMinorKey, mnr) &&
+                 matching->setObject("IOPropertyMatch", properties);
+    OSSafeReleaseNULL(mnr);
+    OSSafeReleaseNULL(mjr);
+    OSSafeReleaseNULL(properties);
+    OSIterator *iterator = ready ? IOService::getMatchingServices(matching) : nullptr;
+    OSSafeReleaseNULL(matching);
+    if (!iterator) return 0;
+    unsigned matches = 0;
+    uint64_t bytes = 0;
+    bool found = false;
+    while (OSObject *object = iterator->getNextObject()) {
+        IOService *media = OSDynamicCast(IOService, object);
+        if (!media) continue;
+        if (++matches != 1) { found = false; break; }
+        OSString *uuid = OSDynamicCast(OSString, media->getProperty("UUID"));
+        OSNumber *size = OSDynamicCast(OSNumber, media->getProperty("Size"));
+        if (!uuid || uuid->getLength() != 36 || strcmp(expectedUUID, uuid->getCStringNoCopy())) continue;
+        bytes = size ? size->unsigned64BitValue() : 0;
+        found = true;
+    }
+    iterator->release();
+    if (!found || matches != 1) return 0;
+    static const char domain[] = "zeus-unverified-window";
+    SHA384_CTX context;
+    SHA384_Init(&context);
+    SHA384_Update(&context, domain, sizeof(domain));
+    SHA384_Update(&context, expectedUUID, 36);
+    SHA384_Update(&context, &bytes, sizeof(bytes));
+    SHA384_Final(digest, &context);
+    return 1;
+}
+#endif
+
 extern "C" int native_verified_block_manifest_sha384(dev_t device, const char *uuid, uint8_t digest[48])
 {
     if (!digest) return 0;
     bzero(digest, kDigestBytes);
     if (!uuid || strlen(uuid) != 36) return 0;
+#if !defined(NATIVE_VERIFIED_BLOCK) || !NATIVE_VERIFIED_BLOCK
+    return unverifiedManifestDigest(device, uuid, digest);
+#else
     return verifiedVolumeQuery(device, uuid, digest);
+#endif
 }
 
 // zeus bring-up diagnostic: one line per IOMedia ("bsd uuid content size leaf"),

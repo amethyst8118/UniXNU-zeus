@@ -1,7 +1,7 @@
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -171,4 +171,117 @@
+@@ -171,4 +171,140 @@
  #include <sys/fsctl.h>
 
  #include <net/init.h>
@@ -17,7 +17,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 + */
 +static unsigned int zeus_panic_after_secs;
 +static char zeus_panic_tail[1700];
-+static char zeus_panic_procs[700];
++static char zeus_panic_procs[1000];
 +
 +static int
 +zeus_contains(const char *s, const char *needle)
@@ -61,7 +61,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +			}
 +			line[ln] = '\0';
 +			if (ln && !zeus_contains(line, "CoreAnalyticsHub") && !zeus_contains(line, "messageClients") &&
-+			    !zeus_contains(line, "unixnu-sysctl-root") && !zeus_contains(line, "IOBlockStorageDriver") && !zeus_contains(line, "device is not ready") && !zeus_contains(line, "coredump (")) {
++			    !zeus_contains(line, "unixnu-sysctl") && !zeus_contains(line, "IOBlockStorageDriver") && !zeus_contains(line, "device is not ready") && !zeus_contains(line, "coredump (")) {
 +				if (n + ln + 1 >= sizeof(zeus_panic_tail)) {
 +					size_t drop = n + ln + 1 - (sizeof(zeus_panic_tail) - 1);
 +					if (drop > n) {
@@ -88,16 +88,39 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +	int nproc = 0;
 +	proc_t p;
 +
-+	/* Processes: pid:name, as many as fit. */
++	/* Processes by name, newest first: name or name*count, up to 56 distinct names. */
++	static char names[56][20];
++	static int counts[56];
++	int nn = 0;
++
 +	proc_list_lock();
 +	LIST_FOREACH(p, &allproc, p_list) {
++		const char *nm = proc_best_name(p);
++		int i;
 +		nproc++;
-+		if (pn + 40 < sizeof(zeus_panic_procs)) {
-+			pn += (size_t)snprintf(zeus_panic_procs + pn, sizeof(zeus_panic_procs) - pn,
-+			    "%d:%s ", proc_getpid(p), proc_best_name(p));
++		for (i = 0; i < nn; i++) {
++			if (strncmp(names[i], nm, sizeof(names[i]) - 1) == 0) {
++				break;
++			}
 +		}
++		if (i == nn) {
++			if (nn == 56) {
++				continue;
++			}
++			strlcpy(names[nn], nm, sizeof(names[nn]));
++			counts[nn] = 0;
++			nn++;
++		}
++		counts[i]++;
 +	}
 +	proc_list_unlock();
++	for (int i = 0; i < nn && pn + 28 < sizeof(zeus_panic_procs); i++) {
++		if (counts[i] > 1) {
++			pn += (size_t)snprintf(zeus_panic_procs + pn, sizeof(zeus_panic_procs) - pn, "%s*%d ", names[i], counts[i]);
++		} else {
++			pn += (size_t)snprintf(zeus_panic_procs + pn, sizeof(zeus_panic_procs) - pn, "%s ", names[i]);
++		}
++	}
 +	panic("zeus-panic-after=%u rootvnode=%p initproc=%p nproc=%d\nprocs: %s\n%s",
 +	    zeus_panic_after_secs, (void *)rootvnode, (void *)initproc, nproc, zeus_panic_procs, zeus_log_tail());
 +}
@@ -119,7 +142,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +	thread_call_enter_delayed(tc, deadline);
 +}
 
-@@ -799,3 +912,4 @@
+@@ -799,3 +935,4 @@
  	if (&native_source_storage_start)
  		native_source_storage_start();
 +	zeus_panic_after_arm();

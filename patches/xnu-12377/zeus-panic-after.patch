@@ -61,7 +61,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +			}
 +			line[ln] = '\0';
 +			if (ln && !zeus_contains(line, "CoreAnalyticsHub") && !zeus_contains(line, "messageClients") &&
-+			    !zeus_contains(line, "unixnu-sysctl-root")) {
++			    !zeus_contains(line, "unixnu-sysctl-root") && !zeus_contains(line, "IOBlockStorageDriver") && !zeus_contains(line, "device is not ready") && !zeus_contains(line, "coredump (")) {
 +				if (n + ln + 1 >= sizeof(zeus_panic_tail)) {
 +					size_t drop = n + ln + 1 - (sizeof(zeus_panic_tail) - 1);
 +					if (drop > n) {

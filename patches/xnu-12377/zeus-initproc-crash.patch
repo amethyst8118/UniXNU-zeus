@@ -1,7 +1,7 @@
 diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
-@@ -1959,6 +1959,44 @@
+@@ -1959,6 +1959,68 @@
  		    proc_getpid(p), (uint32_t)tv_sec, tv_msec);
  	}
  #endif /* (DEVELOPMENT || DEBUG) && CONFIG_COREDUMP */
@@ -14,7 +14,7 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
 +#include <mach/arm/thread_status.h>
 +extern struct arm_saved_state *find_user_regs(thread_t);
 +extern const char *zeus_log_tail(void);
-+static char zeus_init_crash[640];
++static char zeus_init_crash[1024];
 +
 +static const char *
 +zeus_initproc_crash_state(void)
@@ -42,11 +42,35 @@ diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
 +	    (unsigned long long)get_saved_state_reg(ss, 8), (unsigned long long)get_saved_state_reg(ss, 16),
 +	    (unsigned long long)get_saved_state_reg(ss, 17), (unsigned long long)get_saved_state_reg(ss, 29),
 +	    insn[0], insn[1], insn[2], insn[3], mapped ? "" : "(pc unmapped)");
++	{
++		/* Shared cache slide and the user frame-pointer chain (return addresses, PAC stripped). */
++		struct user64_dyld_all_image_infos infos = {};
++		size_t n = strlen(zeus_init_crash);
++		unsigned long long fp = (unsigned long long)get_saved_state_reg(ss, 29);
++		user_addr_t infos_addr = (user_addr_t)task_get_all_image_info_addr(current_task());
++		if (infos_addr) {
++			(void)copyin(infos_addr, &infos, sizeof(infos));
++		}
++		n += (size_t)snprintf(zeus_init_crash + n, sizeof(zeus_init_crash) - n, "\nslide=0x%llx bt",
++		    (unsigned long long)infos.sharedCacheSlide);
++		for (int i = 0; i < 18 && fp != 0 && (fp & 7) == 0 && n + 20 < sizeof(zeus_init_crash); i++) {
++			unsigned long long fr[2] = {0, 0};
++			if (copyin((user_addr_t)fp, fr, sizeof(fr)) != 0) {
++				break;
++			}
++			n += (size_t)snprintf(zeus_init_crash + n, sizeof(zeus_init_crash) - n, " %llx",
++			    fr[1] & 0x00007fffffffffffULL);
++			if (fr[0] <= fp) {
++				break;
++			}
++			fp = fr[0];
++		}
++	}
 +	return zeus_init_crash;
  }
  
  static void
-@@ -2017,13 +2055,15 @@
+@@ -2017,13 +2079,15 @@
  	const uint64_t panic_options_mask = DEBUGGER_OPTION_INITPROC_PANIC | DEBUGGER_OPTION_USERSPACE_INITIATED_PANIC;
  
  	if (p->p_exit_reason == OS_REASON_NULL) {

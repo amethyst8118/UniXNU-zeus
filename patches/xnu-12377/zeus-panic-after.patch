@@ -1,0 +1,72 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -171,4 +171,63 @@
+ #include <sys/fsctl.h>
+
+ #include <net/init.h>
++#include <sys/msgbuf.h>
++#include <kern/thread_call.h>
++
++/*
++ * zeus bring-up: zeus-panic-after=N panics N seconds after vfsinit with the
++ * tail of the kernel message buffer, so the panic screen shows how far the
++ * boot got. The zeus UEFI loads over the ramoops region, so no log survives a
++ * reset; a photograph of this panic is the only record. Diagnostic only.
++ */
++static unsigned int zeus_panic_after_secs;
++static char zeus_panic_tail[1601];
++
++static void
++zeus_panic_after_fire(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
++{
++	struct msgbuf *mb = msgbufp;
++	size_t n = 0;
++	if (mb && mb->msg_magic == MSG_MAGIC && mb->msg_bufc && mb->msg_size > 0) {
++		int size = mb->msg_size;
++		int want = (int)sizeof(zeus_panic_tail) - 1;
++		if (want > size) {
++			want = size;
++		}
++		int start = mb->msg_bufx - want;
++		if (start < 0) {
++			start += size;
++		}
++		for (int i = 0; i < want; i++) {
++			char c = mb->msg_bufc[(start + i) % size];
++			if (c == '\0') {
++				continue;
++			}
++			if (c != '\n' && (c < 0x20 || c > 0x7e)) {
++				c = '?';
++			}
++			zeus_panic_tail[n++] = c;
++		}
++	}
++	zeus_panic_tail[n] = '\0';
++	panic("zeus-panic-after=%u rootvnode=%p initproc=%p\n%s",
++	    zeus_panic_after_secs, (void *)rootvnode, (void *)initproc, zeus_panic_tail);
++}
++
++static void
++zeus_panic_after_arm(void)
++{
++	uint64_t deadline = 0;
++	thread_call_t tc;
++	if (!PE_parse_boot_argn("zeus-panic-after", &zeus_panic_after_secs, sizeof(zeus_panic_after_secs)) ||
++	    zeus_panic_after_secs == 0) {
++		return;
++	}
++	tc = thread_call_allocate(zeus_panic_after_fire, NULL);
++	if (tc == NULL) {
++		return;
++	}
++	clock_interval_to_deadline(zeus_panic_after_secs, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(tc, deadline);
++}
+
+@@ -799,3 +858,4 @@
+ 	if (&native_source_storage_start)
+ 		native_source_storage_start();
++	zeus_panic_after_arm();
+ #if DEVELOPMENT || DEBUG

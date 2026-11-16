@@ -1109,6 +1109,20 @@
       "original_sha256": "1464e4dd2a79f82931b0f0c2e6d234cf464dcbde62e587c76d48b5d82772dfcc",
       "native_symbol": "_proc_ppid",
       "evidence": "Post-owner-trust panic 2026-11-14 20:29: sandbox called this via its import stub (AMFI shares the target). The 120-byte body sits between _proc_checkdeadrefs (0xb0dd694) and _proc_original_ppid (0xb0dd794), the source position of proc_ppid, and returns the parent pid after the proc reference checks. Native _proc_ppid is 0xfffffff0077c0ff4. Source: bsd/kern/kern_proc.c."
+    },
+    {
+      "original": "0xfffffff00b0e4f2c",
+      "original_size": 232,
+      "original_sha256": "989757634825b887141301b1ddef6f5552ae9ee2df6989b1b362681a6b1e1dc7",
+      "native_symbol": "_proc_get_syscall_filter_mask",
+      "evidence": "zeus panic 2026-11-17 (first boot with the 47-bit user range, launchd alive): com.apple.security.sandbox called this through its import stub (return 0xfffffff00a8de31c, GOT 0xfffffff0083c21d8) with x0 = proc, x1 = 0. The 232-byte body switches on w1: 0 loads proc->p_proc_ro (+0x18), checks the read-only zone (zone id 5) and the proc back-reference, and returns the proc_ro syscall filter mask; 1 and 2 take the co-allocated task (proc + 0x768 when P_LHASTASK is set) and tail-call the task mach-trap and kobject filter mask getters; anything else returns NULL. That is proc_get_syscall_filter_mask(proc_t, int which) in bsd/kern/kern_proc.c (SYSCALL_MASK_UNIX / MACH / KOBJ), exported in config/Private.exports."
+    },
+    {
+      "original": "0xfffffff00b2581dc",
+      "original_size": 172,
+      "original_sha256": "1f40347ba961d532d8575e8f9b32d5eb89f80fbe604b09695fb793c9de33275e",
+      "native_symbol": "__ZN12OSDictionary14iterateObjectsEU13block_pointerFbPK8OSSymbolP8OSObjectE",
+      "evidence": "Batch review 43795639174: stubbed import of sandbox, IOSurface, IOHIDFamily and IOAVFamily. The body saves updateStamp (+0xc), loops i < count (+0x14) over the 16-byte key/value entries of the signed dictionary pointer (+0x20, autda), calls the block's invoke pointer (block + 0x10, blraa with the address as discriminator) with (block, key, value), stops when it returns true or updateStamp changed, and returns initialUpdateStamp == updateStamp. That is OSDictionary::iterateObjects(bool (^)(const OSSymbol *, OSObject *)) with the callback form inlined (libkern/c++/OSDictionary.cpp). Bound before it was hit on the device."
     }
   ],
   "data": [

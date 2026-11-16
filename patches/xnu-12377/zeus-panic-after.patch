@@ -1,12 +1,13 @@
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -171,4 +171,63 @@
+@@ -171,4 +171,64 @@
  #include <sys/fsctl.h>
 
  #include <net/init.h>
 +#include <sys/msgbuf.h>
 +#include <kern/thread_call.h>
++#include <pexpert/pexpert.h>
 +
 +/*
 + * zeus bring-up: zeus-panic-after=N panics N seconds after vfsinit with the
@@ -65,7 +66,7 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +	thread_call_enter_delayed(tc, deadline);
 +}
 
-@@ -799,3 +858,4 @@
+@@ -799,3 +859,4 @@
  	if (&native_source_storage_start)
  		native_source_storage_start();
 +	zeus_panic_after_arm();

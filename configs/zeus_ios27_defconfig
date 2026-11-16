@@ -24,3 +24,15 @@ CONFIG_XNU_SOURCE_STORAGE=y
 # that query accepts by construction.
 CONFIG_XNU_OWNER_ROOT_AUDIT=y
 CONFIG_XNU_OWNER_ROOT_TRUST=y
+# Writable Data (sheng iPadOS 27 24A446 chain): without it launchd stops in its
+# ignition/Data phase (nproc=2, swapfile EROFS; docs in notes/DATA-SEED.md).
+# The Data volume comes from the payload's Data seed RAM disk (RamBlock); the
+# SystemOS cryptex and boot manifest come from the owner cache chain.
+# CONFIG_XNU_OWNER_DATA_VOLUME_UUID is rewritten by unixnu runtime to the seed's UUID.
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="00000000-0000-0000-0000-000000000000"

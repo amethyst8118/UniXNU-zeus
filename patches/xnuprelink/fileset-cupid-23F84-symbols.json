@@ -136,6 +136,13 @@
       "original_sha256": "a2cc392af0e8a1ca95526f521982986739b5580fe3aa81bc789cdd7905a81a8f",
       "native_symbol": "_zfree",
       "evidence": "apfs zfree wrapper: calls ___bzero and the paired _zfree_ext; native _zfree calls zfree_ext and bzero. 3 apfs sites."
+    },
+    {
+      "original": "0xfffffff00ae23fb0",
+      "original_size": 704,
+      "original_sha256": "05cf2ba35c25e363ded0a70745da0fc855bd55ee6be7cffab6a2ad12e10f563c",
+      "native_symbol": "__ZN10IOReporter10addChannelEyPKc",
+      "evidence": "zeus 2026-11-16 panic: CoreAnalyticsFamily called this unmapped function from 0xfffffff0097237f0 with x1 = 0x5463612020202020 (an 8-char IOReporter channel id). Body = IOReporter::addChannel(uint64_t, const char*): config lock at this+0x70; _nChannels (this+0x38) > 0x7ffffffe -> 0xe00002e8 kIOReturnOverrun; _channelNames(this+0x40)->ensureCapacity(n+1) (vtable +0xb0) else 0xe00002bd kIOReturnNoMemory; OSSymbol::withCString(name) or gIOReportNoChannelName->retain(); handleSwapPrepare (+0x80); lockReporter = interrupts off + spin lock this+0x80; handleAddChannelSwap (+0x88); unlock; handleSwapCleanup (+0x90); unlock config; release the symbol. The inlined ml_set_interrupts_enabled panic string is why it carries machine_routines_common.c."
     }
   ],
   "data": [],

@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Xiaomi 12 (cupid), Qualcomm SM8450 (waipio).
+// Xiaomi 12 Pro (zeus), Qualcomm SM8450 (waipio v2, SoC revision 2.2).
 //
-// Memory handoff and splash geometry follow the vendor device trees
-// (LineageOS android_kernel_xiaomi_sm8450-devicetrees):
-//   - qcom/waipio.dtsi:            qcom,msm-id = <457 0x10000>
-//   - qcom/display/display/waipio-sde-display.dtsi:
-//                                  cont_splash_region 0xb8000000 + 0x2b00000
-//   - qcom/cupid-sm8450.dtsi:      panel 1080x2400, FTS SPI touch
+// Facts measured on the phone (2026-11-16, HyperOS OS3.0.3.0.VLBINXM):
+//   - qcom,msm-id = <457 ...>, board-id <0x10008 0>, overlay "Zeus based on ... SM8450"
+//   - cont_splash_region 0xb8000000 + 0x2b00000
+//   - panel qcom,mdss_dsi_l2_38_0c_0a_dsc_cmd: 1440x3200 DSI command mode + DSC (720x50 slices)
+//   - System RAM 0x80000000-0xffffffff (holes) and 0x800000000-0x97fffffff
+//   - ST FTS touch irq gpio21 / reset gpio20, 4x CS35L41, AW8697 haptics
+// The full merged tree ABL hands over is dts/live/zeus-live.dtb.
 /dts-v1/;
 /include/ "sm8450.dtsi"
 
 / {
-    model = "Xiaomi 12";
-    compatible = "xiaomi,cupid", "qcom,sm8450";
+    model = "Xiaomi 12 Pro";
+    compatible = "xiaomi,zeus", "qcom,sm8450";
 
-    // Nominal handoff range, as sheng. DarwinBoot owns the contiguous window
-    // selected by [payload.adt] owned_memory_size from the UEFI memory map.
-    // REQUIRED: replace 2 GiB with the measured cupid window once dumped.
+    // Nominal handoff range, as cupid/sheng. DarwinBoot owns the contiguous
+    // window selected by [payload.adt] owned_memory_size from the UEFI map.
     memory@80000000 {
         device_type = "memory";
         reg = <0 0x80000000 0 0x80000000>;
@@ -26,7 +26,7 @@
         #address-cells = <2>;
         #size-cells = <2>;
         ranges;
-        // Stock continuous-splash framebuffer for 1080x2400.
+        // Stock continuous-splash framebuffer (1440x3200x4 = 17.6 MiB used).
         splash_region: framebuffer@b8000000 {
             label = "cont_splash_region";
             reg = <0 0xb8000000 0 0x2b00000>;
@@ -47,5 +47,4 @@
 &cpu7 { unixnu,cluster-type = "P"; };
 
 // No storage, GPU or input component is selected for stage 0, so the nodes
-// stay disabled. Enabling them without a matching driver only publishes
-// resources no kext will claim.
+// stay disabled.

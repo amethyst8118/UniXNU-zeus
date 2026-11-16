@@ -1,13 +1,13 @@
 schema_version = 2
 
 [board]
-name = "cupid"
+name = "zeus"
 soc = "SM8450"
-description = "Xiaomi 12 (cupid)"
+description = "Xiaomi 12 Pro (zeus)"
 # The device package is linked as kits/<kit>. build-sheng-source-storage.py
 # (the sheng UFS runtime builder) hardcodes kits/sheng when it runs from the
 # assembled tree, so the kit folder must carry that name; the board itself is
-# still cupid. This only changes the package folder, not any output name.
+# zeus (Xiaomi 12 Pro), derived from obaosp/UniXNU-cupid. This only changes the package folder, not any output name.
 kit = "sheng"
 soc_source = "sm8450"
 # iPhone-flavoured iOS 27 profile. The profile is shipped in this repository
@@ -16,10 +16,11 @@ soc_source = "sm8450"
 os_profile = "ios-27.0.1-24A446"
 
 [userdata]
-# Measured on the phone (PixelOS, root, 2026-11-07):
-# /dev/block/by-name/userdata -> /dev/block/sda38
-# start 25362432 (512-byte sectors), size 466862040 -> 4096-byte LBA
-# first 3170304, count 58357755, last 61528058.
+# zeus: userdata is /dev/block/sda38 too (Android, 2026-11-16) and fastboot
+# reports 0x37A77FB000 bytes = 58357755 4096-byte LBAs, the same count as cupid.
+# TODO(zeus): the start LBA is cupid's value; confirm in TWRP with
+#   cat /sys/block/sda/sda38/start   (512-byte sectors; divide by 8)
+# before any userdata write. Values below are cupid's (PixelOS, 2026-11-07).
 first_lba = 3170304
 last_lba = 61528058
 lba_bytes = 4096
@@ -31,7 +32,7 @@ lba_bytes = 4096
 include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengUfs", "RamBlock"]
 
 [kernel]
-defconfig = "cupid_ios27_defconfig"
+defconfig = "zeus_ios27_defconfig"
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
@@ -53,43 +54,48 @@ patch_series = [
 ]
 
 [device_tree]
-source = "device:dts/cupid.dts"
+source = "device:dts/zeus.dts"
 include_dirs = ["soc:dts"]
 
 [firmware]
-# uefi-cupid is the Mu-Silicium fork for this board; the cupidPkg platform is
-# the minimal vendor-HW-off configuration on WaipioPkg (SM8450).
-config = "cupid"
-dsc = "Platforms/Xiaomi/cupidPkg/cupid.dsc"
-fd = "Build/cupidPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+# amethyst8118/uefi-zeus (branch zeus): obaosp's uefi-cupid fork plus zeusPkg,
+# the cupidPkg platform with zeus's 1440x3200 framebuffer and identity.
+# Minimal vendor-HW-off configuration on WaipioPkg (SM8450).
+config = "zeus"
+dsc = "Platforms/Xiaomi/zeusPkg/zeus.dsc"
+fd = "Build/zeusPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
 # Gic-Spurious masks interrupts with no registered handler (as sheng does).
 patches = ["Resources/MuPatches/Gic-Spurious.patch"]
-# Binaries is deliberately absent: cupidPkg runs with CUPID_VENDOR_HW = 0 and
-# needs no stock vendor module. Add it when Binary/cupid is imported.
+# Binaries is deliberately absent: zeusPkg runs with ZEUS_VENDOR_HW = 0 and
+# needs no stock vendor module.
 submodules = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 packages = ["{uefi}", "{uefi}/Platforms/Xiaomi", "{tree}/package", "{tree}/drivers/DarwinBoot", "{edk2}", "{uefi}/Common/Mu", "{uefi}/Common/Mu_OEM_Sample", "{uefi}/Silicon/Qualcomm", "{uefi}/Silicon/Silicium", "{uefi}/Silicium-ACPI", "{uefi}/Silicium-ACPI/Platforms/Xiaomi", "{uefi}/Silicium-ACPI/Silicon/Qualcomm"]
 
 [firmware.defines]
 ENABLE_SECUREBOOT = "1"
-DEVICE_MODEL = "cupid"
+DEVICE_MODEL = "zeus"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
-BUILDID_STRING = "cupid-ios27"
+BUILDID_STRING = "zeus-ios27"
 
 [bootimg]
-dtb = "build/cupid/cupid.dtb"
-# Stock ABL FDT already carries the cont_splash_region on most waipio devices;
-# keep the node here until the live cupid DTB is dumped, then drop it if present.
-dtb_node = [{ path = "/reserved-memory/splash_region", props = [{ name = "label", type = "s", value = "cont_splash_region" }, { name = "reg", type = "x", value = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
+dtb = "build/zeus/zeus.dtb"
+# The zeus live FDT (dts/live/zeus-live.dtb) already carries
+# /reserved-memory/splash_region, so no dtb_node override (fdtput refuses an
+# existing node).
 
 [payload]
-volume = "CUPIDESP"
+volume = "ZEUSESP"
 size_mib = 176
 loader = "firmware"
 title = "iOS 27"
 dram_size = "0x80000000"
 panic_screen = true
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1"]
+# zeus stage 0: cupid's native-source-storage=1 native-ufs-root=1 are left out
+# on purpose, so the kernel cannot take its root from UFS userdata (Android's
+# data is still there). Add them back only after an iOS root image has been
+# written to userdata with the owner's approval.
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "amfi_get_out_of_my_way=1"]
 
 [payload.adt]
 # SM8450 msm-id 457 (0x1C9), from the vendor DTS qcom,msm-id.
@@ -115,4 +121,4 @@ artwork-display-gamut = "sRGB"
 unixnu = "../UniXNU"
 
 [package.defconfig]
-"ios-27.0.1-24A446" = "cupid_ios27_defconfig"
+"ios-27.0.1-24A446" = "zeus_ios27_defconfig"

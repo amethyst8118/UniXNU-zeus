@@ -41,7 +41,7 @@ index cd2a9e0..47cf765 100644
 +
 +// The prefix ABL prepends is not guaranteed to end on a sector boundary, so
 +// the 512-byte walk can miss the FAT. Search for the payload volume label
-+// ("CUPIDESP" in board.toml) and derive the boot sector from offset 71.
++// ("ZEUSESP" in board.toml, space-padded to 8) and derive the boot sector from offset 71.
 +#define FAT_LABEL_SCAN_LIMIT (128ULL * 1024 * 1024)
 +
 +STATIC
@@ -51,12 +51,12 @@ index cd2a9e0..47cf765 100644
 +  IN UINT64        Size
 +  )
 +{
-+  STATIC CONST CHAR8  Label[] = { 'C', 'U', 'P', 'I', 'D', 'E', 'S', 'P' };
++  STATIC CONST CHAR8  Label[] = { 'Z', 'E', 'U', 'S', 'E', 'S', 'P', ' ' };
 +  UINT64              Limit = (Size < FAT_LABEL_SCAN_LIMIT) ? Size : FAT_LABEL_SCAN_LIMIT;
 +  UINT64              Index;
 +
 +  for (Index = 0; (Index + sizeof (Label)) <= Limit; ++Index) {
-+    if (Base[Index] != 'C') {
++    if (Base[Index] != 'Z') {
 +      continue;
 +    }
 +    if (CompareMem ((VOID *)(Base + Index), (VOID *)Label, sizeof (Label)) != 0) {

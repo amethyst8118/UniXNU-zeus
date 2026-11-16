@@ -93,9 +93,9 @@ panic_screen = true
 # UFS root on: the kernel takes its root from the SHNGROOT windows in userdata.
 # With Android data still in userdata the driver only reads the GPT and LBA
 # 3170304 and rejects the missing manifest (cupid notes/ROOT-UFS.md).
-# zeus-panic-after=60 (patches/xnu-12377/zeus-panic-after.patch): diagnostic only, panics 60 s after
+# zeus-panic-after=120 (patches/xnu-12377/zeus-panic-after.patch): diagnostic only, panics 120 s after
 # vfsinit with the kernel log tail on screen because ramoops is overwritten by the UEFI. Remove after.
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "zeus-panic-after=60"]
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "zeus-panic-after=120"]
 
 [payload.adt]
 # SM8450 msm-id 457 (0x1C9), from the vendor DTS qcom,msm-id.

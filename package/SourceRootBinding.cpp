@@ -91,6 +91,43 @@ extern "C" int native_verified_block_manifest_sha384(dev_t device, const char *u
     return verifiedVolumeQuery(device, uuid, digest);
 }
 
+// zeus bring-up diagnostic: one line per IOMedia ("bsd uuid content size leaf"),
+// for the owner-cache mount panic (patches/xnu-12377/zeus-owner-cache-diag.patch).
+extern "C" size_t zeus_iomedia_summary(char *buf, size_t size)
+{
+    if (!buf || !size) return 0;
+    buf[0] = 0;
+    OSDictionary *matching = IOService::serviceMatching("IOMedia");
+    OSIterator *iterator = matching ? IOService::getMatchingServices(matching) : nullptr;
+    OSSafeReleaseNULL(matching);
+    if (!iterator) {
+        strlcpy(buf, "no IOMedia\n", size);
+        return strlen(buf);
+    }
+    size_t used = 0;
+    unsigned count = 0;
+    while (OSObject *object = iterator->getNextObject()) {
+        IOService *media = OSDynamicCast(IOService, object);
+        if (!media) continue;
+        ++count;
+        if (used + 120 >= size) continue;
+        OSString *name = OSDynamicCast(OSString, media->getProperty(kIOBSDNameKey));
+        OSString *uuid = OSDynamicCast(OSString, media->getProperty("UUID"));
+        OSString *content = OSDynamicCast(OSString, media->getProperty("Content"));
+        OSNumber *bytes = OSDynamicCast(OSNumber, media->getProperty("Size"));
+        OSObject *leaf = media->getProperty("Leaf");
+        int n = snprintf(buf + used, size - used, "%s %s %s %llu%s\n",
+                         name ? name->getCStringNoCopy() : "-", uuid ? uuid->getCStringNoCopy() : "-",
+                         content ? content->getCStringNoCopy() : "-",
+                         bytes ? (unsigned long long)(bytes->unsigned64BitValue() >> 20) : 0ULL,
+                         leaf == kOSBooleanTrue ? "M leaf" : "M");
+        if (n > 0) used += static_cast<size_t>(n) < size - used ? static_cast<size_t>(n) : size - used - 1;
+    }
+    iterator->release();
+    if (used + 24 < size) used += static_cast<size_t>(snprintf(buf + used, size - used, "IOMedia count %u\n", count));
+    return used;
+}
+
 extern "C" int native_verified_block_volume_device(const char *uuid, dev_t *device, char *path, size_t size)
 {
     if (!uuid || !device || !path || size < 6 || strlen(uuid) != 36) return 0;

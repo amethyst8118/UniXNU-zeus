@@ -1,0 +1,19 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -9123,4 +9123,14 @@
+ 	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
+ 	boot_progress_stage("SystemOS mount returned");
+-	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
++	if (cache_error) {
++		/* zeus bring-up: show which owner-cache stage failed and every IOMedia (package/SourceRootBinding.cpp). */
++		extern size_t zeus_iomedia_summary(char *buf, size_t size);
++		static char zeus_media[1600];
++		zeus_iomedia_summary(zeus_media, sizeof(zeus_media));
++		panic("offline owner SystemOS mount failed: %d stage=%d mount=%d sel=0x%x union=%d ro=%d recheck=%d path=%s want=%s\n%s",
++		    cache_error, native_owner_cache_stage, native_owner_cache_mount_status,
++		    (unsigned)native_owner_cache_selected_device, native_owner_cache_native_union,
++		    native_owner_cache_readonly, native_owner_cache_root_recheck,
++		    native_owner_cache_device_path, XNU_OWNER_CACHE_VOLUME_UUID, zeus_media);
++	}
+ #endif

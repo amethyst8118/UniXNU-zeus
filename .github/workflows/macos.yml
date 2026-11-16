@@ -55,7 +55,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: main
+          # Pinned: the last UniXNU revision this board is known to build and boot
+          # with (zeus boots 2026-11-16). main moved at 21d683d and the device
+          # patch for scripts/patch-xnu-entry-probe.py no longer applies there.
+          # Bump deliberately, one revision at a time.
+          ref: 71400b5663ccb793ef4cea7302d488645011dd61
           path: UniXNU
           persist-credentials: false
 

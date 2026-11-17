@@ -43,6 +43,8 @@ archives = [
   "component:RamBlock",
   "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446",
   # Display: aston's iPhone17,2 (d94ap) IOMobileFramebufferLegacy binding on the firmware GOP framebuffer, CPU path.
+  # The keystore state service, built before the display archive that links its late object (as aston).
+  "component:AppleKeyStoreState",
   "build-zeus-legacy-display-27.py",
 ]
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8450.config", "os:configs/ios.config"]

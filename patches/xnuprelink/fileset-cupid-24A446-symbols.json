@@ -1211,5 +1211,11 @@
       "evidence": "The original kernelcache's VFS SMR domain: struct smr at 0xfffffff00b70c680 with smr_clock 2/2 and smr_name \"VFS\" at +0x28, defined by SMR_DEFINE(_vfs_smr, \"VFS\") in bsd/vfs/vfs_init.c; the native build names it __vfs_smr. APFS imports it through the kernel export alias _apfs_smr:__vfs_smr (config/Private.exports, bsd/sys/vnode.h) and its prelinked __got rebases (0xfffffff0083d6a70 and 0xfffffff0083cc150) still targeted the original 0xb70c680, which is zero in the native fileset layout, so smr_enter faulted with smr_pcpu NULL (panic PC smr_enter+0x28, x19/x21 0xfffffff00b70c680). Binding this address to the native __vfs_smr lets the fileset rebase both GOT slots to the initialized VFS SMR; verified locally: both slots then resolve to 0xfffffff00b6c1a40."
     }
   ],
-  "sites": []
+  "sites": [
+    {
+      "site": "0xfffffff0080c85d0",
+      "native_symbol": "_unixnu_kernel_stack_shift",
+      "evidence": "zeus panic 2026-11-17: \"AMFI: failed to create OSDictionary copy: 14\" (OSEntitlements.cpp:863) on the exec path (posix_spawn -> exec_mach_imgact -> imgact_setup_runtime_mitigations -> IOVnodeHasEntitlement -> cs_entitlements_dictionary_copy_vnode). AppleMobileFileIntegrity's GOT slot for PAGE_SHIFT_CONST (the emitted slot resolves to _PAGE_SHIFT_CONST; original target 0xfffffff007dec770). Its only reader in AMFI text is the CoreEntitlements DER iterator's stack check at 0xfffffff00921d300 (adrp/ldr slot, ldr w8, mask = ~(-1 << shift), sp & mask < 0x80 takes the error exit), which assumes the stack base is aligned to 1 << shift as on 16 KiB-page Apple kernels. On the native 4 KiB kernel it fires inside a good stack at some call depths. Same binding as the iPad 24A446 kit fixture (site 0xfffffe0008136458) and the macOS 26C5035r fixture in UniXNU; the symbol comes from patches/xnu-12377/zeus-kernel-stack-shift.patch."
+    }
+  ]
 }

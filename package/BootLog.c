@@ -51,6 +51,11 @@ extern volatile uint32_t native_legacy_rej_rects[2][4] __attribute__((weak_impor
 extern char native_legacy_rej_class[32] __attribute__((weak_import));
 // Signals to started cores whose SIGPdisabled had never been cleared (xnu cpu_common.c sheng_sigp_recover).
 extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
+// ArmCpu.cpp: the threads interrupts found running on logical core 1 (zeus SMP bisect), newest at (count - 1) % 16.
+extern volatile uint32_t armcpu_ring_count __attribute__((weak_import));
+extern volatile int32_t armcpu_ring_pid[16] __attribute__((weak_import));
+extern volatile uint64_t armcpu_ring_tid[16] __attribute__((weak_import)), armcpu_ring_at[16] __attribute__((weak_import));
+extern char armcpu_ring_name[16][17] __attribute__((weak_import));
 // ArmCpu.cpp secondary bring-up state (zeus SMP bisect): per logical core.
 extern volatile uint32_t armcpu_smp_step[8] __attribute__((weak_import)), armcpu_smp_fail[8] __attribute__((weak_import)),
   armcpu_core_timer[8] __attribute__((weak_import)), armcpu_core_sgi[8] __attribute__((weak_import)), armcpu_smp_running __attribute__((weak_import)),
@@ -833,6 +838,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&sheng_sigp_recovered) {
     char row[48];
     snprintf(row, sizeof row, "[sigp] recovered=%u", sheng_sigp_recovered);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // '#' lines pass every log group filter: the core 1 thread ring, newest first, with the counter time in ms.
+  if (&armcpu_ring_count && armcpu_ring_count) {
+    uint64_t hz = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz)); if (!hz) hz = 19200000;
+    const uint32_t count = armcpu_ring_count, n = count < 16 ? count : 16;
+    char row[240];
+    int k = snprintf(row, sizeof row, "#smp1 ring %u:", count);
+    for (uint32_t i = 0; i < n && k > 0 && k < (int)sizeof row - 40; ++i) {
+      const uint32_t slot = (count - 1 - i) % 16;
+      char name[18]; memcpy(name, armcpu_ring_name[slot], 17); name[17] = 0;
+      k += snprintf(row + k, sizeof row - k, " %s/%d/%llu@%llu", name, armcpu_ring_pid[slot], (unsigned long long)armcpu_ring_tid[slot],
+                    (unsigned long long)(armcpu_ring_at[slot] * 1000 / hz));
+      if (i == 5 || i == 11) {at = put(out, at, cap, row, sizeof row); k = snprintf(row, sizeof row, "#smp1 ring+");}
+    }
     at = put(out, at, cap, row, sizeof row);
   }
   if (&armcpu_smp_step) {

@@ -1,0 +1,44 @@
+--- f/ArmCpu.cpp	2026-11-17 21:04:48
++++ g/ArmCpu.cpp	2026-11-17 21:21:52
+@@ -21,6 +21,33 @@
+ extern "C" void sched_perfcontrol_update_recommended_cores (uint32_t);   // exported for the perf controller (Private.arm64.exports)
+ extern "C" thread_t current_thread (void);
+ extern "C" kern_return_t thread_terminate (thread_t);
++extern "C" int proc_selfpid (void);
++extern "C" void proc_selfname (char *, int);
++extern "C" uint64_t thread_tid (thread_t);
++// zeus bisect: the threads interrupts found running on logical core 1, newest at (armcpu_ring_count - 1) % 16. An entry is written
++// only when the interrupted thread differs from the previous one, so the idle thread does not flood the ring.
++extern "C" {
++volatile uint32_t armcpu_ring_count = 0;
++volatile int32_t armcpu_ring_pid[16];
++volatile uint64_t armcpu_ring_tid[16], armcpu_ring_at[16];
++char armcpu_ring_name[16][17];
++}
++static uint64_t gRingLastTid = 0;
++static void ringRecord (void)
++{
++  const uint64_t tid = thread_tid (current_thread ());
++  if (tid == gRingLastTid) { return; }
++  gRingLastTid = tid;
++  const uint32_t slot = armcpu_ring_count % 16;
++  armcpu_ring_tid[slot] = tid;
++  armcpu_ring_pid[slot] = proc_selfpid ();
++  uint64_t now;
++  __asm__ volatile ("mrs %0, cntvct_el0" : "=r" (now));
++  armcpu_ring_at[slot] = now;
++  proc_selfname (armcpu_ring_name[slot], 17);
++  __asm__ volatile ("dmb ish" ::: "memory");
++  armcpu_ring_count = armcpu_ring_count + 1;
++}
+ 
+ extern "C" {
+ volatile uint32_t armcpu_registered = 0;
+@@ -821,6 +848,7 @@
+ 
+ void ArmCpu::interrupt (void)
+ {
++  if (logicalId == 1) { ringRecord (); }
+   unsigned drained=0;
+   ArmCpuCoreStats &core = gCore[logicalId & 7];
+   const bool fromIdle = core.wakeOpen != 0;

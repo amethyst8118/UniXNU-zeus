@@ -21,3 +21,6 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
 - `0005-zeus-smp-recommend.patch`: `armcpu-smp-recommend=MASK` sets the scheduler's recommended cores
   (`sched_perfcontrol_update_recommended_cores`) from the first start thread. A core outside the mask comes online and
   takes its timer and IPIs in its idle thread, but the scheduler places no thread on it.
+- `0006-zeus-smp-ring.patch`: every interrupt on logical core 1 records the interrupted thread (process name, pid, thread
+  id, counter time) in a 16-entry ring when it differs from the previous entry. BootLog prints it each round as
+  `#smp1 ring` lines (newest first, `name/pid/tid@ms`), which no log group filters out.

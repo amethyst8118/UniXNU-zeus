@@ -51,6 +51,10 @@ extern volatile uint32_t native_legacy_rej_rects[2][4] __attribute__((weak_impor
 extern char native_legacy_rej_class[32] __attribute__((weak_import));
 // Signals to started cores whose SIGPdisabled had never been cleared (xnu cpu_common.c sheng_sigp_recover).
 extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
+// ArmCpu.cpp secondary bring-up state (zeus SMP bisect): per logical core.
+extern volatile uint32_t armcpu_smp_step[8] __attribute__((weak_import)), armcpu_smp_fail[8] __attribute__((weak_import)),
+  armcpu_core_timer[8] __attribute__((weak_import)), armcpu_core_sgi[8] __attribute__((weak_import)), armcpu_smp_running __attribute__((weak_import)),
+  armcpu_irq_phase __attribute__((weak_import)), armcpu_irq_id __attribute__((weak_import));
 extern volatile uint32_t sheng_idle_sigp_cleared __attribute__((weak_import)), sheng_idle_sigp_refused __attribute__((weak_import)),
   sheng_idle_enter[8] __attribute__((weak_import)), sheng_idle_disallowed[8] __attribute__((weak_import));
 extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
@@ -829,6 +833,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&sheng_sigp_recovered) {
     char row[48];
     snprintf(row, sizeof row, "[sigp] recovered=%u", sheng_sigp_recovered);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&armcpu_smp_step) {
+    char row[200];
+    snprintf(row, sizeof row, "[smp] running=%u step=%u/%u/%u/%u fail=%u/%u/%u/%u timer=%u/%u/%u/%u ipi=%u/%u/%u/%u irq phase=%u id=%u",
+             armcpu_smp_running, armcpu_smp_step[0], armcpu_smp_step[1], armcpu_smp_step[2], armcpu_smp_step[3], armcpu_smp_fail[0],
+             armcpu_smp_fail[1], armcpu_smp_fail[2], armcpu_smp_fail[3], armcpu_core_timer[0], armcpu_core_timer[1], armcpu_core_timer[2],
+             armcpu_core_timer[3], armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3], armcpu_irq_phase, armcpu_irq_id);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&sheng_idle_enter) {
@@ -2659,6 +2671,9 @@ static void round_watch_start(void) {
 
 static void writer(void *arg, wait_result_t result) {
   (void)arg; (void)result;
+  // log-period-ms=N (100 to 2000): a shorter round for a boot that dies within seconds of an event (zeus SMP bisect).
+  uint32_t period_ms = LogPeriodMs;
+  if (PE_parse_boot_argn("log-period-ms", &period_ms, sizeof period_ms) && (period_ms < 100 || period_ms > LogPeriodMs)) period_ms = LogPeriodMs;
   thread_set_thread_name(current_thread(), "boot_log");
   uint64_t first = 0, blocks = 0;
   const char *why = "";
@@ -2824,7 +2839,7 @@ static void writer(void *arg, wait_result_t result) {
       if (took > 4 * f) ++rounds_slow;
     }
     log_round_began = 0;
-    IOSleep(LogPeriodMs);
+    IOSleep(period_ms);
   }
 }
 

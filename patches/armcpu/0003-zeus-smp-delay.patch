@@ -1,0 +1,26 @@
+--- c/ArmCpu.cpp	2026-11-17 19:37:18
++++ d/ArmCpu.cpp	2026-11-17 20:03:15
+@@ -3,6 +3,7 @@
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <IOKit/IOLocks.h>
++#include <IOKit/IOLib.h>
+ #include <libkern/c++/OSData.h>
+ #include <libkern/c++/OSSymbol.h>
+ #include <libkern/libkern.h>
+@@ -666,6 +667,15 @@
+ {
+   ArmCpu *self = static_cast<ArmCpu *> (argument);
+   armcpu_smp_step[self->logicalId] = 3;
++  // zeus bisect, boot-arg armcpu-smp-delay=N: start this core N seconds later, once the boot log writes rounds, so the log holds the
++  // seconds before a failure that follows the start.
++  unsigned delay = 0;
++  PE_parse_boot_argn ("armcpu-smp-delay", &delay, sizeof (delay));
++  if (delay != 0 && delay <= 600) {
++    IOSleep (delay * 1000U);
++    kprintf ("ArmCpu: starting CPU %u after %u s\n", self->logicalId, delay);
++    IOLog ("ArmCpu: starting CPU %u after %u s\n", self->logicalId, delay);
++  }
+   // Kernels that leave the start to the driver block here until the new core reaches the scheduler; a core that never arrives only
+   // stalls this helper thread. Kernels that start a core when it registers return at once.
+   processor_start (self->machProcessor);

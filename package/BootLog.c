@@ -51,6 +51,10 @@ extern volatile uint32_t native_legacy_rej_rects[2][4] __attribute__((weak_impor
 extern char native_legacy_rej_class[32] __attribute__((weak_import));
 // Signals to started cores whose SIGPdisabled had never been cleared (xnu cpu_common.c sheng_sigp_recover).
 extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
+// ArmCpu.cpp (armcpu-gh-wdt): the Gunyah virtual watchdog's status as each core saw it at initCPU, after a stop, and core 1's last sample.
+extern volatile int64_t armcpu_wdt_init[8][3] __attribute__((weak_import)), armcpu_wdt_stop[8][4] __attribute__((weak_import)),
+  armcpu_wdt_live[3] __attribute__((weak_import));
+extern volatile uint32_t armcpu_wdt_samples __attribute__((weak_import));
 // ArmCpu.cpp: the threads interrupts found running on logical core 1 (zeus SMP bisect), newest at (count - 1) % 16.
 extern volatile uint32_t armcpu_ring_count __attribute__((weak_import));
 extern volatile int32_t armcpu_ring_pid[16] __attribute__((weak_import));
@@ -609,6 +613,26 @@ static size_t ring_rows(char *out, size_t at, size_t cap) {
   return put(out, at, cap, row, sizeof row);
 }
 
+// '#wdt' row: the Gunyah virtual watchdog status (SMCCC 0x86000006: x0 result, x1 control state, x2 ms since the last ping) on the
+// writer's core now, and what ArmCpu recorded on core 1.
+static size_t wdt_row(char *out, size_t at, size_t cap) {
+  if (!&armcpu_wdt_init) return at;
+  register uint64_t x0 __asm__("x0") = 0x86000006ULL;
+  register uint64_t x1 __asm__("x1") = 0;
+  register uint64_t x2 __asm__("x2") = 0;
+  register uint64_t x3 __asm__("x3") = 0;
+  __asm__ volatile("smc #0" : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3) : : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14",
+                   "x15", "x16", "x17", "memory");
+  uint64_t mpidr; __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+  char row[240];
+  snprintf(row, sizeof row, "#wdt here(aff1 %llu) %lld/%lld/%lld cpu1 init %lld/%lld/%lld stop %lld then %lld/%lld/%lld live %lld/%lld/%lld (%u)",
+           (unsigned long long)((mpidr >> 8) & 0xff), (long long)x0, (long long)x1, (long long)x2,
+           (long long)armcpu_wdt_init[1][0], (long long)armcpu_wdt_init[1][1], (long long)armcpu_wdt_init[1][2],
+           (long long)armcpu_wdt_stop[1][0], (long long)armcpu_wdt_stop[1][1], (long long)armcpu_wdt_stop[1][2], (long long)armcpu_wdt_stop[1][3],
+           (long long)armcpu_wdt_live[0], (long long)armcpu_wdt_live[1], (long long)armcpu_wdt_live[2], armcpu_wdt_samples);
+  return put(out, at, cap, row, sizeof row);
+}
+
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
   char head[128];
@@ -860,6 +884,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // '#' lines pass every log group filter: the core 1 thread ring.
   at = ring_rows(out, at, cap);
+  at = wdt_row(out, at, cap);
   if (&armcpu_smp_step) {
     char row[200];
     snprintf(row, sizeof row, "[smp] running=%u step=%u/%u/%u/%u fail=%u/%u/%u/%u timer=%u/%u/%u/%u ipi=%u/%u/%u/%u irq phase=%u id=%u held=%u",

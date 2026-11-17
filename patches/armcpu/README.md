@@ -31,3 +31,6 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
   secondary core's panic stay on screen?).
 - `0009-zeus-smp-bound-split.patch`: `armcpu-smp-bound=4` computes forever after the first switch (no block, no timer of
   its own); `=5` loops on `IOSleep (1)` with no work between (block and wake only).
+- `0010-zeus-smp-gh-wdt.patch`: `armcpu-gh-wdt=1` records the Gunyah virtual watchdog's status (SMCCC 0x86000006) on each
+  secondary core at initCPU and every 64th interrupt of core 1; `=2` also stops it from that core (control 2, as Linux
+  `gh_wdt_stop`). BootLog's `#wdt` row prints the writer core's own status next to core 1's.

@@ -1,0 +1,64 @@
+--- j/ArmCpu.cpp	2026-11-17 23:18:53
++++ k/ArmCpu.cpp	2026-11-17 23:36:50
+@@ -108,6 +108,29 @@
+ // (10 ms steps, interrupts masked) until the counter reads N seconds of uptime, then joins the scheduler. The boot core does not
+ // wait for it, so the boot log is writing rounds when the core starts to run threads.
+ static unsigned gSmpDelay = 0;
++// zeus bisect, boot-arg armcpu-gh-wdt=N: the Gunyah virtual watchdog (SMCCC vendor hypervisor calls 0x86000005 control,
++// 0x86000006 status: x0 result, x1 control state, x2 ms since the last ping) as seen from a secondary core. 1 records the status at
++// initCPU and every 64th interrupt of core 1; 2 also stops it from that core (control 2, as Linux gh_wdt_stop) and records again.
++static unsigned gGhWdt = 0;
++extern "C" { volatile int64_t armcpu_wdt_init[8][3], armcpu_wdt_stop[8][4], armcpu_wdt_live[3]; volatile uint32_t armcpu_wdt_samples = 0; }
++static void ghWdtStatus (volatile int64_t *out)
++{
++  register uint64_t x0 __asm__ ("x0") = 0x86000006ULL;
++  register uint64_t x1 __asm__ ("x1") = 0;
++  register uint64_t x2 __asm__ ("x2") = 0;
++  register uint64_t x3 __asm__ ("x3") = 0;
++  __asm__ volatile ("smc #0" : "+r" (x0), "+r" (x1), "+r" (x2), "+r" (x3) : : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
++  out[0] = static_cast<int64_t> (x0); out[1] = static_cast<int64_t> (x1); out[2] = static_cast<int64_t> (x2);
++}
++static int64_t ghWdtControl (uint64_t value)
++{
++  register uint64_t x0 __asm__ ("x0") = 0x86000005ULL;
++  register uint64_t x1 __asm__ ("x1") = value;
++  register uint64_t x2 __asm__ ("x2") = 0;
++  register uint64_t x3 __asm__ ("x3") = 0;
++  __asm__ volatile ("smc #0" : "+r" (x0), "+r" (x1), "+r" (x2), "+r" (x3) : : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
++  return static_cast<int64_t> (x0);
++}
+ // armcpu-smp-hold-irq=1: during that hold the core unmasks IRQs around each WFI, so every timer pop is taken as a real exception
+ // (vector, sleh_irq, ArmCpu::interrupt); the handler only masks the timer and ends the interrupt (no rtclock_intr).
+ static unsigned gHoldIrq = 0;
+@@ -416,6 +439,7 @@
+     PE_parse_boot_argn ("armcpu-smp-park", &gSmpPark, sizeof (gSmpPark));
+     PE_parse_boot_argn ("armcpu-smp-delay", &gSmpDelay, sizeof (gSmpDelay));
+     PE_parse_boot_argn ("armcpu-smp-hold-irq", &gHoldIrq, sizeof (gHoldIrq));
++    PE_parse_boot_argn ("armcpu-gh-wdt", &gGhWdt, sizeof (gGhWdt));
+     if (smp == 0 || ml_get_cpu_number (id) < 0 || ml_get_cpu_number (id) >= ARMCPU_SMP_SLOTS) {
+       return nullptr; // Secondary startup is opt-in (smp=1).
+     }
+@@ -803,6 +827,15 @@
+     // install their handler directly. ml_install_interrupt_handler() records it in the calling core's cpu_data.
+     ml_install_interrupt_handler (this, static_cast<int> (logicalId), this, reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
+     enableCPUTimeBase (true);
++    if (gGhWdt != 0) {
++      ghWdtStatus (armcpu_wdt_init[logicalId & 7]);
++      if (gGhWdt == 2) {
++        armcpu_wdt_stop[logicalId & 7][0] = ghWdtControl (2);
++        int64_t after[3];
++        ghWdtStatus (after);
++        armcpu_wdt_stop[logicalId & 7][1] = after[0]; armcpu_wdt_stop[logicalId & 7][2] = after[1]; armcpu_wdt_stop[logicalId & 7][3] = after[2];
++      }
++    }
+     if (gSmpPark == 2) { armcpu_smp_fail[logicalId] = 9; parkCore (); }
+     if (gSmpDelay != 0 && gSmpDelay <= 3600) {
+       uint64_t hz, now;
+@@ -895,6 +928,7 @@
+ void ArmCpu::interrupt (void)
+ {
+   if (logicalId == 1) { ringRecord (); }
++  if (logicalId == 1 && gGhWdt != 0 && (armcpu_core_timer[1] & 63) == 0) { ghWdtStatus (armcpu_wdt_live); armcpu_wdt_samples = armcpu_wdt_samples + 1; }
+   unsigned drained=0;
+   ArmCpuCoreStats &core = gCore[logicalId & 7];
+   const bool fromIdle = core.wakeOpen != 0;

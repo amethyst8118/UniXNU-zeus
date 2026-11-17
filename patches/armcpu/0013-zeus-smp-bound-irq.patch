@@ -1,5 +1,5 @@
 --- m/ArmCpu.cpp	2026-11-18 00:13:48
-+++ n/ArmCpu.cpp	2026-11-18 00:34:18
++++ n/ArmCpu.cpp	2026-11-18 00:35:41
 @@ -29,8 +29,11 @@
  extern "C" wait_result_t thread_block (thread_continue_t);
  // zeus bisect, boot-arg armcpu-smp-bound=N: a kernel thread bound to logical core 1 (with armcpu-smp-recommend=1 the only thread
@@ -9,7 +9,7 @@
 +// 7: spin taking 1 kHz timer IRQs that only re-arm the timer.
  extern "C" { volatile uint64_t armcpu_bound_passes = 0; volatile uint32_t armcpu_bound_cpu = 0xff; }
 +static uint64_t counter (void);
-+extern volatile bool gRawTimer[8];
++extern "C" volatile bool gRawTimer[8];
  static void boundWork (void *argument, wait_result_t)
  {
    const unsigned mode = static_cast<unsigned> (reinterpret_cast<uintptr_t> (argument));
@@ -37,7 +37,7 @@
  // 0x86000006 status: x0 result, x1 control state, x2 ms since the last ping) as seen from a secondary core. 1 records the status at
  // initCPU and every 64th interrupt of core 1; 2 also stops it from that core (control 2, as Linux gh_wdt_stop) and records again.
  static unsigned gGhWdt = 0;
-+volatile bool gRawTimer[8];   // armcpu-smp-bound=7: core's timer IRQ only re-arms 1 ms ahead (no rtclock_intr)
++extern "C" { volatile bool gRawTimer[8]; }   // armcpu-smp-bound=7: core's timer IRQ only re-arms 1 ms ahead (no rtclock_intr)
  // zeus bisect, boot-arg armcpu-epss=ROW: before the first CPU_ON the boot core sets the EPSS performance row of frequency domain 0
  // (A510 cores 0-3; base 0x17d91000, FREQ_LUT 0x100, PERF_STATE 0x320 as Linux qcom-cpufreq-hw epss). The table and the rows before
  // and after are kept for the boot log. Row 0 is the slowest.

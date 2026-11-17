@@ -1,5 +1,5 @@
 --- n/ArmCpu.cpp	2026-11-18 00:35:41
-+++ o/ArmCpu.cpp	2026-11-18 00:56:12
++++ o/ArmCpu.cpp	2026-11-18 00:57:40
 @@ -34,6 +34,8 @@
  extern "C" { volatile uint64_t armcpu_bound_passes = 0; volatile uint32_t armcpu_bound_cpu = 0xff; }
  static uint64_t counter (void);
@@ -27,34 +27,28 @@
    }
    if (mode == 4) {   // busy forever after the first switch: no block, no timer of its own
      volatile uint64_t spin = 0;
-@@ -317,6 +330,12 @@
-   __asm__ volatile ("dsb ishst" ::: "memory");
-   write32 (dist, 0x200 + (id / 32) * 4, 1U << (id % 32));
-   __asm__ volatile ("dsb sy" ::: "memory");
-+}
+@@ -432,6 +445,20 @@
+ static uint32_t gSpiRoutes[1024];
+ static volatile uint32_t gSpiUsed = 0;
+ static uint64_t gBootAffinity = 0;
++// armcpu-smp-bound=8: an IPI to logical core 0 from the calling core, the way signalCPU sends it (SPI 1008 with armcpu-spi-ipi=1,
++// else SGI 0 to the boot core's affinity).
++static void ipiToBoot (void)
++{
++  if (gSpiIpi) {
++    spiIpiSend (gDist, 0);
++    return;
++  }
 +  const uint64_t aff = gBootAffinity;
 +  const uint64_t sgi = ((aff & 0xff00000000ULL) << 16) | ((aff & 0xff0000) << 16) | ((aff & 0xff00) << 8) | (1ULL << (aff & 0xff));
 +  __asm__ volatile ("dsb ishst" ::: "memory");
 +  __asm__ volatile ("msr icc_sgi1r_el1, %0" :: "r" (sgi) : "memory");
 +  __asm__ volatile ("isb" ::: "memory");
- }
- 
- // The cluster type the ADT gives this core (cluster-type 'E' or 'P'), so each cluster registers as its own processor set.
-@@ -432,6 +451,13 @@
- static uint32_t gSpiRoutes[1024];
- static volatile uint32_t gSpiUsed = 0;
- static uint64_t gBootAffinity = 0;
-+
-+// armcpu-smp-bound=8: an IPI to logical core 0 from the calling core, the way signalCPU sends it (SPI 1008 with armcpu-spi-ipi=1,
-+// else SGI 0 to the boot core's affinity).
-+static void ipiToBoot (void)
-+{
-+  if (gSpiIpi) { spiIpiSend (gDist, 0); return; }
-+
++}
  static IOLock *gSpiRegistrationLock;
  static IOLock *spiRegistrationLock (void)
  {
-@@ -816,7 +842,7 @@
+@@ -816,7 +843,7 @@
      if (__atomic_exchange_n (&applied, 1U, __ATOMIC_ACQ_REL) == 0) { sched_perfcontrol_update_recommended_cores (recommend); }
    }
    uint32_t bound = 0;

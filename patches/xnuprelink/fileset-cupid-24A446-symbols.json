@@ -1237,6 +1237,42 @@
       "native_symbol": "__vfs_smr",
       "addend": 0,
       "evidence": "The original kernelcache's VFS SMR domain: struct smr at 0xfffffff00b70c680 with smr_clock 2/2 and smr_name \"VFS\" at +0x28, defined by SMR_DEFINE(_vfs_smr, \"VFS\") in bsd/vfs/vfs_init.c; the native build names it __vfs_smr. APFS imports it through the kernel export alias _apfs_smr:__vfs_smr (config/Private.exports, bsd/sys/vnode.h) and its prelinked __got rebases (0xfffffff0083d6a70 and 0xfffffff0083cc150) still targeted the original 0xb70c680, which is zero in the native fileset layout, so smr_enter faulted with smr_pcpu NULL (panic PC smr_enter+0x28, x19/x21 0xfffffff00b70c680). Binding this address to the native __vfs_smr lets the fileset rebase both GOT slots to the initialized VFS SMR; verified locally: both slots then resolve to 0xfffffff00b6c1a40."
+    },
+    {
+      "original": "0xfffffff007e5a7f0",
+      "native_symbol": "__ZN12OSCollection9metaClassE",
+      "addend": 0,
+      "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Constant slot whose pointer is the OSMetaClass object at 0xfffffff00b791ab0, which the original kernel constructs with the class name string \"OSCollection\" (adrp/add x0 = object, adrp/add x1 = name before the OSMetaClass constructor). IOSurface loads the slot through its GOT. Same identity as the iPad 24A446 kit fixture entry. Source: libkern/c++/OSCollection.cpp OSDefineMetaClass metaClass pointer."
+    },
+    {
+      "original": "0xfffffff007e5a7f8",
+      "native_symbol": "__ZN8OSObject9metaClassE",
+      "addend": 0,
+      "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Constant slot whose pointer is the OSMetaClass object at 0xfffffff00b7943f8, constructed with the class name string \"OSObject\". IOHIDFamily and IOSurface load it through their GOT. Same identity as the iPad 24A446 kit fixture entry. Source: libkern/c++/OSObject.cpp."
+    },
+    {
+      "original": "0xfffffff007e5a880",
+      "native_symbol": "__ZN12IOUserClient9metaClassE",
+      "addend": 0,
+      "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Constant slot whose pointer is the OSMetaClass object at 0xfffffff00b793e60; code that takes that object's address sits next to the class name strings \"IOUserClient\" (its own constructor) and \"IOUserClient2022\" / \"IOUserUserClient\" (subclasses naming it as superclass). AppleARMPlatform loads the slot through its GOT, as in the iPad 24A446 kit fixture. Source: iokit/Kernel/IOUserClient.cpp."
+    },
+    {
+      "original": "0xfffffff007e87df8",
+      "native_symbol": "__ZN18IOMemoryDescriptor9metaClassE",
+      "addend": 0,
+      "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Constant slot whose pointer is the OSMetaClass object at 0xfffffff00b792dd0; code that takes that object's address sits next to \"IOMemoryDescriptor\" (its own constructor) and \"IOGeneralMemoryDescriptor\", \"IOSubMemoryDescriptor\", \"IOMultiMemoryDescriptor\", \"IOInterleavedMemoryDescriptor\" (subclasses naming it as superclass). IOHIDFamily, IOReportFamily, IOStorageFamily and IOSurface load the slot. Same identity as the iPad 24A446 kit fixture entry. Source: iokit/Kernel/IOMemoryDescriptor.cpp."
+    },
+    {
+      "original": "0xfffffff00b792640",
+      "native_symbol": "_gIOParentMatchKey",
+      "addend": 0,
+      "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Zero-initialised global with one store in the original kernel, in the IOService::initialize sequence right after the OSSymbol made from \"IOParentMatch\" (preceded by \"IOLocationMatch\", followed by \"IOMatchCategory\" and \"IODefaultMatchCategory\"). ApplePMGR, IOAVFamily and IOHDCPFamily read it. Same identity as the iPad 24A446 kit fixture entry. Source: iokit/Kernel/IOService.cpp gIOParentMatchKey."
+    },
+    {
+      "original": "0xfffffff00b794680",
+      "native_symbol": "_gIOAllCPUInitializedKey",
+      "addend": 0,
+      "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Zero-initialised global with one store in the original kernel, right after the OSSymbol made from \"IOAllCPUInitialized\" (followed by \"IOPlatformFunctionHandlerSet\"). AppleARMPlatform and AppleARMWatchdogTimer read it. Same identity as the iPad 24A446 kit fixture entry. Source: iokit/Kernel/IOService.cpp gIOAllCPUInitializedKey."
     }
   ],
   "sites": [

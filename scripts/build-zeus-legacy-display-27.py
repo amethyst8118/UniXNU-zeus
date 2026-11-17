@@ -421,6 +421,11 @@ void sheng_buttons_probe(void) {}
 void sheng_backlight_probe(void) {}
 void sheng_dpu_probe(void) {}
 void aston_boot_screen_probe(void) {}
+// No GPU driver is linked: every frame is already written when its swap arrives (submitted == retired), and nothing is traced.
+bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *) {if(submitted)*submitted=0;if(retired)*retired=0;return true;}
+bool native_adreno_fences(uint32_t *submitted,uint32_t *retired) {return native_adreno_fences_detail(submitted,retired,nullptr);}
+int native_gpu_trace_enabled(void) {return 0;}
+void native_gpu_trace_record(uint32_t,uint32_t,const uint64_t *,uint32_t) {}
 }
 ''')
 compile_cpp(stubs, OUT / 'ZeusDisplayStubs.o')

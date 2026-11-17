@@ -114,6 +114,14 @@ skip_setup = true
 gpu_addon = false
 trust_components = ["StaticTrustCache", "Cryptex1,SystemTrustCache", "Cryptex1,AppTrustCache"]
 
+[payload.install]
+# sheng: the menu entry that creates the persistent Data store. A store window without this seed's header is
+# left alone ("Kept") and Data then has no writable backing, so the FIRST boot must go through this entry.
+title = "Install and boot"
+confirm = "ERASE all iOS user data and install again?"
+confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+confirm_args = ["data-reset=1", "data-reset=2"]
+
 [payload.adt]
 # SM8450 msm-id 457 (0x1C9), from the vendor DTS qcom,msm-id.
 chip_id = "457"

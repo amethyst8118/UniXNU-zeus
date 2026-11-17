@@ -1151,6 +1151,13 @@
       "original_sha256": "70c01cf568a210d3abd5353036159dfac4da5df7290c552ff007139d1bec104c",
       "native_symbol": "_OSKernelStackRemaining",
       "evidence": "Batch review 43795639174: stubbed import of IOCryptoAcceleratorFamily. Leaf function: takes the address of a local, compares it with the current thread's kernel stack bounds (tpidr_el1 fields, 16 KiB stacks) and returns local - stack bottom: OSKernelStackRemaining() in libkern/gen/OSDebug.cpp / osfmk/arm64. Bound before it was hit on the device."
+    },
+    {
+      "original": "0xfffffff00ac9033c",
+      "original_size": 144,
+      "original_sha256": "d94bc6374125c24af3605a9e733d5f264fdb0187481b265fab3c2cb203febbc0",
+      "native_symbol": "_vm_kernel_addrhide",
+      "evidence": "Device panic 2026-11-17 (display image, boot-noclient): IOSurface 0xfffffff00a32e118 called the unmapped original 0xfffffff00ac9033c through GOT 0xfffffff008321940; IOGPUFamily imports it too (batch review 43795639174). Body: strips the PAC bits (orr/and on bit 55), compares the address with the slid and permuted kernel ranges and writes the result through x1: osfmk/vm/vm_kern.c vm_kernel_addrhide. Upstream UniXNU fixture fileset-24A446-symbols.json binds the same function (iPad 0xfffffe000ae013bc, 140 bytes, same evidence)."
     }
   ],
   "data": [

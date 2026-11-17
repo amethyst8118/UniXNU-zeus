@@ -6,6 +6,11 @@
 // at I2C 0xd over QUP0 SE5. TWRP on zeus runs both rails (pm8008j_l3 3.304 V, pm8350c_l2 1.8 V). GCC offsets: Linux gcc-waipio.c
 // as zhouzhoublm/hakios-unicorn drivers/input/hakios.stfts.c (same SoC family, same SE and pins) quotes them. The GENI engine's own
 // registers are not read in stage 1: its bus clocks may be gated, and an unclocked read can stall the interconnect.
+//   2  stage 1, then: vote the clocks of QUP0 SE4 and SE5 (lowest DFS preset of at least 4 MHz, root enable), mux GPIO 16-19 to qup4
+//      (6 mA, no pull) and GPIO 206-207 to qup5 (2 mA, pull-up), and once a branch reads on, read that engine's identity
+//      (GENI_FW_REVISION_RO protocol: 1 SPI, 3 I2C; GENI_IF_DISABLE_RO; FIFO depth). Reset (GPIO 20) and the interrupt (21) are left
+//      alone, so the controller stays in reset. Offsets: Linux gcc-sm8450.c (SE4 0x274dc/0x274e4 bit 14, SE5 0x27610/0x27618 bit 15)
+//      and pinctrl-sm8450.c (qup4 and qup5 are function 1 on these pins).
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
@@ -111,8 +116,85 @@ void stage1(void) {
   unmap(obs, obsSize);
   unmap(a.core, SpmiCoreSize);
   unmap(a.cnfg, SpmiCnfgSize);
-  snprintf(zeus_touch_rows[4], sizeof zeus_touch_rows[4], "#touch s1 avdd pm8008j_l3: on the PM8008 (I2C, QUP0 SE5), read in stage 2");
   for (unsigned i = 0; i < 4; ++i) IOLog("%s\n", zeus_touch_rows[i]);
+}
+
+// XO 19.2 MHz, GPLL0 600 MHz, GPLL0 even 300 MHz (gcc_parent_map_0); CFG [4:0] 2*div-1, [10:8] source, [13:12] mode.
+uint32_t rcgRate(uint32_t cfg, uint32_t m, uint32_t notNMinusM) {
+  static const uint32_t parent[8] = {19200000, 600000000, 0, 0, 0, 0, 300000000, 0};
+  uint64_t hz = parent[cfg >> 8 & 7];
+  const uint32_t div = cfg & 0x1f;
+  if (div) hz = hz * 2 / (div + 1);
+  if (cfg >> 12 & 3) {
+    const uint32_t n = (~notNMinusM & 0xffff) + (m & 0xffff);
+    if (n) hz = hz * (m & 0xffff) / n;
+  }
+  return static_cast<uint32_t>(hz);
+}
+
+// One engine: vote its branch, pick a DFS preset, enable the root, wait for the branch. Fills row; returns true when it reads on.
+bool engineClock(volatile uint32_t *qup, volatile uint32_t *vote, uint32_t cbcr, uint32_t cmd, uint32_t bit, const char *name, char *row,
+                 unsigned cap, uint32_t *hzOut) {
+  const uint32_t dfsr = cmd + 0x14, perfCfg = cmd + 0x1c, perfM = cmd + 0x5c, perfN = cmd + 0x9c;
+  uint32_t hz = 0, level = 0;
+  if (qup[dfsr / 4] & 1) {
+    for (uint32_t l = 0; l < 8; ++l) {
+      const uint32_t r = rcgRate(qup[(perfCfg + 4 * l) / 4], qup[(perfM + 4 * l) / 4], qup[(perfN + 4 * l) / 4]);
+      if (r >= 4000000 && (hz == 0 || r < hz)) {hz = r; level = l;}
+    }
+  }
+  vote[VoteOffset / 4] = vote[VoteOffset / 4] | (1u << bit);
+  qup[cmd / 4] = qup[cmd / 4] | 2;            // CMD_RCGR.ROOT_EN
+  bool on = false;
+  for (unsigned i = 0; i < 1000 && !on; ++i) {
+    on = !(qup[cbcr / 4] & 0x80000000u);
+    if (!on) IODelay(10);
+  }
+  snprintf(row, cap, "%s clock %s cbcr %08x root %08x dfs %u preset %u = %u Hz", name, on ? "on" : "OFF", qup[cbcr / 4], qup[cmd / 4],
+           qup[dfsr / 4] & 1, level, hz);
+  *hzOut = hz;
+  return on;
+}
+
+void muxPin(unsigned pin, unsigned function, unsigned pull, unsigned ma) {
+  volatile uint32_t *p = map(TlmmBase + TlmmStride * pin, 0x1000);
+  if (!p) return;
+  p[0] = pull | function << 2 | (ma / 2 - 1) << 6;   // input direction; the engine drives its own lines
+  unmap(p, 0x1000);
+}
+
+// GENI identity of the engine at phys (read only after its clock is on).
+void engineIdentity(uint64_t phys, char *row, unsigned cap, const char *name) {
+  volatile uint32_t *se = map(phys, 0x4000);
+  if (!se) {snprintf(row, cap, "%s not mapped", name); return;}
+  const uint32_t fw = se[0x068 / 4], ifd = se[0x064 / 4], hw0 = se[0xe24 / 4], st = se[0x040 / 4], dma = se[0x258 / 4];
+  snprintf(row, cap, "%s fw %08x (protocol %u) if_disable %u fifo %u words hw0 %08x status %08x dma_mode %u", name, fw, fw >> 8 & 0xff, ifd & 1,
+           hw0 >> 16 & 0x3f, hw0, st, dma & 1);
+  unmap(se, 0x4000);
+}
+
+void stage2(void) {
+  volatile uint32_t *qup = map(GccQup, 0x1000), *vote = map(GccVotePage, 0x1000);
+  if (!qup || !vote) {
+    snprintf(zeus_touch_rows[4], sizeof zeus_touch_rows[4], "#touch s2 gcc not mapped");
+    unmap(qup, 0x1000);
+    unmap(vote, 0x1000);
+    return;
+  }
+  char a[100], b[100], c[110], d[110];
+  uint32_t hz4 = 0, hz5 = 0;
+  const bool on4 = engineClock(qup, vote, Se4Cbcr, 0x4e4, 14, "se4", a, sizeof a, &hz4);
+  const bool on5 = engineClock(qup, vote, 0x610, 0x618, 15, "se5", b, sizeof b, &hz5);
+  unmap(qup, 0x1000);
+  unmap(vote, 0x1000);
+  for (unsigned pin = 16; pin <= 19; ++pin) muxPin(pin, 1, 0, 6);
+  muxPin(206, 1, 3, 2);
+  muxPin(207, 1, 3, 2);
+  if (on4) engineIdentity(0x990000, c, sizeof c, "se4"); else snprintf(c, sizeof c, "se4 identity skipped (clock off)");
+  if (on5) engineIdentity(0x994000, d, sizeof d, "se5"); else snprintf(d, sizeof d, "se5 identity skipped (clock off)");
+  snprintf(zeus_touch_rows[4], sizeof zeus_touch_rows[4], "#touch s2 %s | %s", a, b);
+  snprintf(zeus_touch_rows[5], sizeof zeus_touch_rows[5], "#touch s2 %s | %s", c, d);
+  IOLog("%s\n%s\n", zeus_touch_rows[4], zeus_touch_rows[5]);
 }
 }  // namespace
 
@@ -123,4 +205,5 @@ extern "C" void native_touch_probe(void) {
   ran = 1;
   zeus_touch_stage = stage;
   stage1();
+  if (stage >= 2) stage2();
 }

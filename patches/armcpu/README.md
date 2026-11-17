@@ -42,3 +42,5 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
   firing every 1 ms while masked (a pending interrupt for a running vCPU). Neither joins the scheduler.
 - `0013-zeus-smp-bound-irq.patch`: `armcpu-smp-bound=6` spins with interrupts disabled (timer pending, never taken);
   `=7` spins taking 1 kHz timer IRQs whose handler only re-arms the timer (no `rtclock_intr`, no scheduler work).
+- `0014-zeus-smp-bound-ipi.patch`: `armcpu-smp-bound=8` spins with interrupts disabled and every 10 ms sends logical core 0
+  an IPI the way `signalCPU` does (SPI 1008 with `armcpu-spi-ipi=1`, else SGI 0); `armcpu_bound_ipis` counts them.

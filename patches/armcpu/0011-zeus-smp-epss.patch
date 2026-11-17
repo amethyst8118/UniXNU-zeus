@@ -1,0 +1,47 @@
+--- k/ArmCpu.cpp	2026-11-17 23:36:50
++++ l/ArmCpu.cpp	2026-11-17 23:54:04
+@@ -112,6 +112,12 @@
+ // 0x86000006 status: x0 result, x1 control state, x2 ms since the last ping) as seen from a secondary core. 1 records the status at
+ // initCPU and every 64th interrupt of core 1; 2 also stops it from that core (control 2, as Linux gh_wdt_stop) and records again.
+ static unsigned gGhWdt = 0;
++// zeus bisect, boot-arg armcpu-epss=ROW: before the first CPU_ON the boot core sets the EPSS performance row of frequency domain 0
++// (A510 cores 0-3; base 0x17d91000, FREQ_LUT 0x100, PERF_STATE 0x320 as Linux qcom-cpufreq-hw epss). The table and the rows before
++// and after are kept for the boot log. Row 0 is the slowest.
++extern "C" vm_offset_t ml_io_map (vm_offset_t, vm_size_t);
++extern "C" { volatile uint32_t armcpu_epss_lut[16], armcpu_epss_before = 0xffffffff, armcpu_epss_after = 0xffffffff, armcpu_epss_asked = 0xffffffff; }
++static void epssSet (void);
+ extern "C" { volatile int64_t armcpu_wdt_init[8][3], armcpu_wdt_stop[8][4], armcpu_wdt_live[3]; volatile uint32_t armcpu_wdt_samples = 0; }
+ static void ghWdtStatus (volatile int64_t *out)
+ {
+@@ -256,6 +262,23 @@
+ static void write32 (uintptr_t base, unsigned offset, uint32_t value)
+ {
+   *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
++}
++
++static void epssSet (void)
++{
++  static uint32_t done = 0;
++  uint32_t row = 0;
++  if (!PE_parse_boot_argn ("armcpu-epss", &row, sizeof (row)) || row > 31) { return; }
++  if (__atomic_exchange_n (&done, 1U, __ATOMIC_ACQ_REL) != 0) { return; }
++  const vm_offset_t base = ml_io_map (0x17d91000, 0x1000);
++  if (base == 0) { return; }
++  for (unsigned i = 0; i < 16; i++) { armcpu_epss_lut[i] = read32 (base, 0x100 + 4 * i); }
++  armcpu_epss_before = read32 (base, 0x320);
++  armcpu_epss_asked = row;
++  write32 (base, 0x320, row);
++  __asm__ volatile ("dsb sy" ::: "memory");
++  IODelay (1000);
++  armcpu_epss_after = read32 (base, 0x320);
+ }
+ 
+ // Distributor side of the software IPI of logical core `core`: group 1, edge-triggered, priority 0x80, routed to affinity `aff`, enabled.
+@@ -1189,6 +1212,7 @@
+   bool hvc = false;
+   if (!psciConduit (&hvc)) { armcpu_smp_psci_rc[logicalId] = -1001; return KERN_NOT_SUPPORTED; }
+   armcpu_smp_conduit = hvc ? 2 : 1;
++  epssSet ();
+   static volatile uint32_t asked = 0;
+   if (gStats && __atomic_exchange_n (&asked, 1U, __ATOMIC_ACQ_REL) == 0) {
+     // What the firmware offers for idle. These calls change no state: PSCI_VERSION, then from PSCI 1.0 on PSCI_FEATURES of the SMC64

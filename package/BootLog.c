@@ -51,6 +51,9 @@ extern volatile uint32_t native_legacy_rej_rects[2][4] __attribute__((weak_impor
 extern char native_legacy_rej_class[32] __attribute__((weak_import));
 // Signals to started cores whose SIGPdisabled had never been cleared (xnu cpu_common.c sheng_sigp_recover).
 extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
+// ArmCpu.cpp (armcpu-epss): EPSS domain 0's frequency table and its performance row before and after the write.
+extern volatile uint32_t armcpu_epss_lut[16] __attribute__((weak_import)), armcpu_epss_before __attribute__((weak_import)),
+  armcpu_epss_after __attribute__((weak_import)), armcpu_epss_asked __attribute__((weak_import));
 // ArmCpu.cpp (armcpu-gh-wdt): the Gunyah virtual watchdog's status as each core saw it at initCPU, after a stop, and core 1's last sample.
 extern volatile int64_t armcpu_wdt_init[8][3] __attribute__((weak_import)), armcpu_wdt_stop[8][4] __attribute__((weak_import)),
   armcpu_wdt_live[3] __attribute__((weak_import));
@@ -633,6 +636,18 @@ static size_t wdt_row(char *out, size_t at, size_t cap) {
   return put(out, at, cap, row, sizeof row);
 }
 
+// '#epss' row: domain 0 rows as MHz (19.2 MHz x lval, or 300 for source 0), the row before, asked for and read back.
+static size_t epss_row(char *out, size_t at, size_t cap) {
+  if (!&armcpu_epss_asked || armcpu_epss_asked == 0xffffffffu) return at;
+  char row[240];
+  int k = snprintf(row, sizeof row, "#epss d0 row %u -> asked %u, reads %u; MHz", armcpu_epss_before, armcpu_epss_asked, armcpu_epss_after);
+  for (unsigned i = 0; i < 16 && k > 0 && k < (int)sizeof row - 8; ++i) {
+    const uint32_t v = armcpu_epss_lut[i];
+    k += snprintf(row + k, sizeof row - k, " %u", (v >> 30) ? (unsigned)((v & 0xff) * 192 / 10) : 300u);
+  }
+  return put(out, at, cap, row, sizeof row);
+}
+
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
   char head[128];
@@ -885,6 +900,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // '#' lines pass every log group filter: the core 1 thread ring.
   at = ring_rows(out, at, cap);
   at = wdt_row(out, at, cap);
+  at = epss_row(out, at, cap);
   if (&armcpu_smp_step) {
     char row[200];
     snprintf(row, sizeof row, "[smp] running=%u step=%u/%u/%u/%u fail=%u/%u/%u/%u timer=%u/%u/%u/%u ipi=%u/%u/%u/%u irq phase=%u id=%u held=%u",

@@ -34,3 +34,6 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
 - `0010-zeus-smp-gh-wdt.patch`: `armcpu-gh-wdt=1` records the Gunyah virtual watchdog's status (SMCCC 0x86000006) on each
   secondary core at initCPU and every 64th interrupt of core 1; `=2` also stops it from that core (control 2, as Linux
   `gh_wdt_stop`). BootLog's `#wdt` row prints the writer core's own status next to core 1's.
+- `0011-zeus-smp-epss.patch`: `armcpu-epss=ROW`: before the first CPU_ON the boot core writes EPSS domain 0's PERF_STATE
+  (A510 cores 0-3, 0x17d91000 + 0x320) and keeps the frequency table and the rows before and after; BootLog's `#epss` row
+  prints them (MHz = 19.2 x lval).

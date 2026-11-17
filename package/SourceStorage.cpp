@@ -28,6 +28,17 @@ extern "C" bool ml_static_mfree_prepare(vm_offset_t, vm_size_t)
 {
     return false;
 }
+// zeus: counters the full sheng BootLog.c reports from components zeus does not
+// build (the 4K code-signing digest statistics and the video-toolbox bridge).
+// Same arm64e weak-import rule as above, so they exist here as zeros and the
+// log shows them as zero.
+extern "C" {
+volatile uint32_t vt_paravirt_stage = 0, vt_paravirt_opens = 0, vt_paravirt_messages = 0, vt_paravirt_refused = 0;
+volatile uint32_t vt_host_sessions = 0, vt_host_frames_in = 0, vt_host_frames_out = 0, vt_host_frames_dropped = 0,
+    vt_host_errors = 0, vt_host_error_stage = 0;
+uint64_t cs_native4k_digest_wall[2] = {0, 0}, cs_native4k_digest_cpu[2] = {0, 0}, cs_native4k_digest_bytes[2] = {0, 0},
+    cs_native4k_chunk_ticks = 0, cs_native4k_record_ticks = 0;
+}
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void source_storage_base_init(void) __asm__("__GLOBAL__sub_I_IOBlockStorageDevice.cpp");

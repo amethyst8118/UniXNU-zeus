@@ -1,0 +1,31 @@
+diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -72,6 +72,7 @@
+ 
+ 
+ #include <libkern/section_keywords.h>
++#include <libkern/kernel_mach_header.h>
+ 
+ extern boolean_t        idle_enable;
+ extern uint64_t         wake_abstime;
+@@ -980,6 +981,19 @@
+ 			CleanPoC_DcacheRegion_Force((vm_offset_t)&const_boot_args, sizeof(const_boot_args));
+ 			CleanPoC_DcacheRegion_Force((vm_offset_t)&cpu_ttep, sizeof(cpu_ttep));
+ 			CleanPoC_DcacheRegion_Force((vm_offset_t)bootstrap_pagetables, BOOTSTRAP_TABLE_SIZE);
++			/* zeus: mondrian (SM8475, UniXNU device record) also cleans the whole kernel image before CPU_ON: the new core
++			 * fetches kernel text and reads kernel data with caches off until start_cpu enables its MMU. Same segments. */
++			{
++				extern kernel_mach_header_t _mh_execute_header;
++				static const char *const zeus_segments[] = {"__TEXT", "__TEXT_EXEC", "__DATA_CONST", "__DATA", "__BOOTDATA"};
++				for (unsigned int i = 0; i < sizeof(zeus_segments) / sizeof(zeus_segments[0]); i++) {
++					unsigned long size = 0;
++					void *base = getsegdatafromheader(&_mh_execute_header, zeus_segments[i], &size);
++					if (base != NULL && size != 0) {
++						CleanPoC_DcacheRegion_Force((vm_offset_t)base, (size_t)size);
++					}
++				}
++			}
+ 			__builtin_arm_dsb(DSB_SY);
+ 		}
+ #endif

@@ -4,3 +4,4 @@ zeus-owner-cache-diag.patch
 zeus-initproc-crash.patch
 zeus-sheng-ipados27-kernel.patch
 zeus-smp-poc-cleans.patch
+zeus-smp-kernel-clean.patch

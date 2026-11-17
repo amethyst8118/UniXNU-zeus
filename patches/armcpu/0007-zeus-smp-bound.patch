@@ -1,0 +1,49 @@
+--- g/ArmCpu.cpp	2026-11-17 21:21:52
++++ h/ArmCpu.cpp	2026-11-17 22:41:31
+@@ -24,6 +24,32 @@
+ extern "C" int proc_selfpid (void);
+ extern "C" void proc_selfname (char *, int);
+ extern "C" uint64_t thread_tid (thread_t);
++extern "C" processor_t cpu_to_processor (int);
++extern "C" processor_t thread_bind (processor_t);
++extern "C" wait_result_t thread_block (thread_continue_t);
++// zeus bisect, boot-arg armcpu-smp-bound=N: a kernel thread bound to logical core 1 (with armcpu-smp-recommend=1 the only thread
++// besides its idle thread). 1: a compute loop and IOSleep (1); 2: the same plus a 4 MiB memset/memcpy each pass.
++extern "C" { volatile uint64_t armcpu_bound_passes = 0; volatile uint32_t armcpu_bound_cpu = 0xff; }
++static void boundWork (void *argument, wait_result_t)
++{
++  const unsigned mode = static_cast<unsigned> (reinterpret_cast<uintptr_t> (argument));
++  processor_t target = cpu_to_processor (1);
++  if (target == nullptr) { thread_terminate (current_thread ()); return; }
++  thread_bind (target);
++  thread_block (THREAD_CONTINUE_NULL);
++  uint8_t *a = nullptr, *b = nullptr;
++  if (mode == 2) { a = static_cast<uint8_t *> (IOMalloc (4U << 20)); b = static_cast<uint8_t *> (IOMalloc (4U << 20)); }
++  volatile uint64_t sink = 0;
++  for (;;) {
++    for (uint32_t i = 0; i < 200000; i++) { sink = sink + i; }
++    if (a != nullptr && b != nullptr) { memset (a, static_cast<int> (armcpu_bound_passes & 0xff), 4U << 20); memcpy (b, a, 4U << 20); }
++    uint64_t mpidr;
++    __asm__ volatile ("mrs %0, mpidr_el1" : "=r" (mpidr));
++    armcpu_bound_cpu = static_cast<uint32_t> ((mpidr >> 8) & 0xff);
++    armcpu_bound_passes = armcpu_bound_passes + 1;
++    IOSleep (1);
++  }
++}
+ // zeus bisect: the threads interrupts found running on logical core 1, newest at (armcpu_ring_count - 1) % 16. An entry is written
+ // only when the interrupted thread differs from the previous one, so the idle thread does not flood the ring.
+ extern "C" {
+@@ -712,6 +738,13 @@
+     static uint32_t applied = 0;
+     if (__atomic_exchange_n (&applied, 1U, __ATOMIC_ACQ_REL) == 0) { sched_perfcontrol_update_recommended_cores (recommend); }
+   }
++  uint32_t bound = 0;
++  if (self->logicalId == 1 && PE_parse_boot_argn ("armcpu-smp-bound", &bound, sizeof (bound)) && (bound == 1 || bound == 2)) {
++    thread_t worker;
++    if (kernel_thread_start (&boundWork, reinterpret_cast<void *> (static_cast<uintptr_t> (bound)), &worker) == KERN_SUCCESS) {
++      thread_deallocate (worker);
++    }
++  }
+   // Kernels that leave the start to the driver block here until the new core reaches the scheduler; a core that never arrives only
+   // stalls this helper thread. Kernels that start a core when it registers return at once.
+   processor_start (self->machProcessor);

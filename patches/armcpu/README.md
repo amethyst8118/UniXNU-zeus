@@ -24,3 +24,6 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
 - `0006-zeus-smp-ring.patch`: every interrupt on logical core 1 records the interrupted thread (process name, pid, thread
   id, counter time) in a 16-entry ring when it differs from the previous entry. BootLog prints it each round as
   `#smp1 ring` lines (newest first, `name/pid/tid@ms`), which no log group filters out.
+- `0007-zeus-smp-bound.patch`: `armcpu-smp-bound=1|2` starts one kernel thread bound to logical core 1 (with
+  `armcpu-smp-recommend=1` the only thread there besides its idle thread): 1 a compute loop and `IOSleep (1)`, 2 the same
+  plus a 4 MiB memset/memcpy each pass. `armcpu_bound_passes` and `armcpu_bound_cpu` (MPIDR Aff1) count its passes.

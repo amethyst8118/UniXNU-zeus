@@ -1,0 +1,23 @@
+diff --git a/scripts/patch-xnu-entry-probe.py b/scripts/patch-xnu-entry-probe.py
+--- a/scripts/patch-xnu-entry-probe.py
++++ b/scripts/patch-xnu-entry-probe.py
+@@ -206,7 +206,7 @@
+             raise SystemExit('Invalid _boot_progress_panic_text')
+         definitions.append(f'-DPANIC_TEXT={text:#x}UL')
+     subprocess.run([clang, '--target=aarch64-none-elf', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
+-                    '-mgeneral-regs-only', '-fno-pic', '-mcmodel=tiny', '-Oz', f'-DVINFO={VINFO_VA:#x}UL',
++                    '-mgeneral-regs-only', '-fno-pic', '-mcmodel=tiny', '-Oz', '-fomit-frame-pointer', f'-DVINFO={VINFO_VA:#x}UL',
+                     *definitions, f'-I{font_dir}', '-c', source, '-o', obj], check=True)
+     script = workdir / 'panic.ld'
+     script.write_text('SECTIONS { . = %#x; .text : { *(.text.a_entry) *(.text.a_common) *(.text*) *(.rodata*) } /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.ARM.*) } }\n' % va)
+diff --git a/scripts/xnu-panic-screen.c b/scripts/xnu-panic-screen.c
+--- a/scripts/xnu-panic-screen.c
++++ b/scripts/xnu-panic-screen.c
+@@ -273,7 +273,6 @@
+   /* Resolved from this candidate's symbols by the patcher, never fixed addresses.
+    * Values are sampled at panic time and need not form an atomic VM snapshot. */
+   (void)MAX_MEM;
+-  hex (&g, "\npages=", *(volatile const u32 *)PAGE_TOTAL);
+   hex (&g, "\nfree=", *(volatile const u32 *)PAGE_FREE);
+   /* The raw argument slots are not dumped: the formatted message above already carries them (room for the PANIC_TEXT copy). */
+   mark[0] = 0xC0FFEE11u;

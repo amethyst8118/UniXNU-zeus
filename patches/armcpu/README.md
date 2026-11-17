@@ -14,3 +14,7 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
   threads. `armcpu_smp_held[core]` counts the wake-ups. (A sleep before `processor_start` did nothing: on iPadOS 27 the
   kernel starts the core through `startCPU` when it registers.) BootLog's `log-period-ms=` shortens the rounds and its
   `[smp]` row prints each core's start step, park/fail code, timer and IPI counts, the IRQ phase and core 1's hold count.
+- `0004-zeus-smp-hold-irq.patch`: `armcpu-smp-hold-irq=1` unmasks IRQs around each WFI of that hold, so every timer pop is
+  taken as a real exception on the held core (vector, `sleh_irq`, `ArmCpu::interrupt`); for a held core the handler only
+  masks the timer and ends the interrupt (no `rtclock_intr`, no scheduler). Splits "the IRQ exception path on a secondary
+  core" from "scheduler work on it".

@@ -1,0 +1,63 @@
+--- d/ArmCpu.cpp	2026-11-17 20:21:45
++++ e/ArmCpu.cpp	2026-11-17 20:38:02
+@@ -41,6 +41,10 @@
+ // (10 ms steps, interrupts masked) until the counter reads N seconds of uptime, then joins the scheduler. The boot core does not
+ // wait for it, so the boot log is writing rounds when the core starts to run threads.
+ static unsigned gSmpDelay = 0;
++// armcpu-smp-hold-irq=1: during that hold the core unmasks IRQs around each WFI, so every timer pop is taken as a real exception
++// (vector, sleh_irq, ArmCpu::interrupt); the handler only masks the timer and ends the interrupt (no rtclock_intr).
++static unsigned gHoldIrq = 0;
++static volatile bool gHolding[8];
+ extern "C" { volatile uint32_t armcpu_smp_held[8]; }   // wake-ups counted while held (1 = holding)
+ // 3, 4 and 5 let the core run and join the scheduler with one interrupt source taken away: 3 no timer PPI 27 (IPIs work), 4 no IPI
+ // (timer works), 5 no interrupts at all (Group 1 off after the setup).
+@@ -344,6 +348,7 @@
+     PE_parse_boot_argn ("smp", &smp, sizeof (smp));
+     PE_parse_boot_argn ("armcpu-smp-park", &gSmpPark, sizeof (gSmpPark));
+     PE_parse_boot_argn ("armcpu-smp-delay", &gSmpDelay, sizeof (gSmpDelay));
++    PE_parse_boot_argn ("armcpu-smp-hold-irq", &gHoldIrq, sizeof (gHoldIrq));
+     if (smp == 0 || ml_get_cpu_number (id) < 0 || ml_get_cpu_number (id) >= ARMCPU_SMP_SLOTS) {
+       return nullptr; // Secondary startup is opt-in (smp=1).
+     }
+@@ -724,6 +729,7 @@
+       if (hz == 0) { hz = 19200000; }
+       const uint64_t until = static_cast<uint64_t> (gSmpDelay) * hz;
+       armcpu_smp_held[logicalId & 7] = 1;
++      gHolding[logicalId & 7] = gHoldIrq != 0;
+       for (;;) {
+         now = counter ();
+         if (now >= until) { break; }
+@@ -733,9 +739,17 @@
+         __asm__ volatile ("msr cntv_ctl_el0, %0" :: "r" (on) : "memory");
+         __asm__ volatile ("isb" ::: "memory");
+         __asm__ volatile ("dsb sy" ::: "memory");
+-        __asm__ volatile ("wfi" ::: "memory");
++        if (gHoldIrq != 0) {
++          __asm__ volatile ("msr daifclr, #2" ::: "memory");
++          __asm__ volatile ("wfi" ::: "memory");
++          __asm__ volatile ("isb" ::: "memory");
++          __asm__ volatile ("msr daifset, #2" ::: "memory");
++        } else {
++          __asm__ volatile ("wfi" ::: "memory");
++        }
+         armcpu_smp_held[logicalId & 7] = armcpu_smp_held[logicalId & 7] + 1;
+       }
++      gHolding[logicalId & 7] = false;
+       const uint64_t far = ~0ULL;
+       __asm__ volatile ("msr cntv_cval_el0, %0" :: "r" (far) : "memory");
+       __asm__ volatile ("isb" ::: "memory");
+@@ -822,7 +836,13 @@
+       timerTaken (core, core.wakeOpen != 0);
+       wokenBy (core, 0);
+       armcpu_irq_phase=2;
+-      rtclock_intr (0);
++      if (gHolding[logicalId & 7]) {
++        const uint64_t masked = 2;   // held core: mask the timer; the hold loop re-arms it
++        __asm__ volatile ("msr cntv_ctl_el0, %0" :: "r" (masked) : "memory");
++        __asm__ volatile ("isb" ::: "memory");
++      } else {
++        rtclock_intr (0);
++      }
+       armcpu_irq_phase=3;
+     } else if ((id & 0xffffff) == 0) {
+       armcpu_ipi_interrupts = armcpu_ipi_interrupts + 1;

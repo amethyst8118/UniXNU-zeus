@@ -1,0 +1,14 @@
+--- a/scripts/xnu-panic-screen.c	2026-11-17 22:56:07
++++ b/scripts/xnu-panic-screen.c	2026-11-17 22:56:21
+@@ -43,7 +43,10 @@
+ __attribute__((noreturn)) static void park (void)
+ {
+   for (;;) {
+-    __asm__ volatile ("wfe");
++    /* WFI, not WFE: Gunyah traps WFI and blocks the vCPU, while a vCPU left in WFE keeps its physical core (ArmCpu parkCore);
++     * zeus: a panic parked in WFE on a secondary core powered the phone off before the text could be read. */
++    __asm__ volatile ("dsb sy" ::: "memory");
++    __asm__ volatile ("wfi" ::: "memory");
+   }
+ }
+ 

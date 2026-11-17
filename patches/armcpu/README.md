@@ -27,3 +27,5 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
 - `0007-zeus-smp-bound.patch`: `armcpu-smp-bound=1|2` starts one kernel thread bound to logical core 1 (with
   `armcpu-smp-recommend=1` the only thread there besides its idle thread): 1 a compute loop and `IOSleep (1)`, 2 the same
   plus a 4 MiB memset/memcpy each pass. `armcpu_bound_passes` and `armcpu_bound_cpu` (MPIDR Aff1) count its passes.
+- `0008-zeus-smp-bound-panic.patch`: `armcpu-smp-bound=3`: the bound thread panics on core 1 at once (does a
+  secondary core's panic stay on screen?).

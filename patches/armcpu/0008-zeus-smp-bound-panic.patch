@@ -1,0 +1,32 @@
+--- h/ArmCpu.cpp	2026-11-17 22:41:31
++++ i/ArmCpu.cpp	2026-11-17 22:56:39
+@@ -28,7 +28,7 @@
+ extern "C" processor_t thread_bind (processor_t);
+ extern "C" wait_result_t thread_block (thread_continue_t);
+ // zeus bisect, boot-arg armcpu-smp-bound=N: a kernel thread bound to logical core 1 (with armcpu-smp-recommend=1 the only thread
+-// besides its idle thread). 1: a compute loop and IOSleep (1); 2: the same plus a 4 MiB memset/memcpy each pass.
++// besides its idle thread). 1: a compute loop and IOSleep (1); 2: the same plus a 4 MiB memset/memcpy each pass; 3: a panic.
+ extern "C" { volatile uint64_t armcpu_bound_passes = 0; volatile uint32_t armcpu_bound_cpu = 0xff; }
+ static void boundWork (void *argument, wait_result_t)
+ {
+@@ -37,6 +37,11 @@
+   if (target == nullptr) { thread_terminate (current_thread ()); return; }
+   thread_bind (target);
+   thread_block (THREAD_CONTINUE_NULL);
++  if (mode == 3) {   // a deliberate panic on core 1: does the panic screen hold there?
++    uint64_t mpidr;
++    __asm__ volatile ("mrs %0, mpidr_el1" : "=r" (mpidr));
++    panic ("zeus SMP test: deliberate panic on core with MPIDR 0x%llx", mpidr);
++  }
+   uint8_t *a = nullptr, *b = nullptr;
+   if (mode == 2) { a = static_cast<uint8_t *> (IOMalloc (4U << 20)); b = static_cast<uint8_t *> (IOMalloc (4U << 20)); }
+   volatile uint64_t sink = 0;
+@@ -739,7 +744,7 @@
+     if (__atomic_exchange_n (&applied, 1U, __ATOMIC_ACQ_REL) == 0) { sched_perfcontrol_update_recommended_cores (recommend); }
+   }
+   uint32_t bound = 0;
+-  if (self->logicalId == 1 && PE_parse_boot_argn ("armcpu-smp-bound", &bound, sizeof (bound)) && (bound == 1 || bound == 2)) {
++  if (self->logicalId == 1 && PE_parse_boot_argn ("armcpu-smp-bound", &bound, sizeof (bound)) && (bound >= 1 && bound <= 3)) {
+     thread_t worker;
+     if (kernel_thread_start (&boundWork, reinterpret_cast<void *> (static_cast<uintptr_t> (bound)), &worker) == KERN_SUCCESS) {
+       thread_deallocate (worker);

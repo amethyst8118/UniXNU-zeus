@@ -392,6 +392,15 @@ extern "C" void boot_progress_stage(const char *) {}
 extern "C" int boot_progress_pulse_anchor(uintptr_t,uint64_t,unsigned,unsigned,unsigned) {return 0;}
 ''')
 compile_cpp(support, OUT / 'LegacyDisplaySupport27.o')
+# The keystore state service (AppleKeyStoreState) and its probe, as aston: KeyStoreProbe.cpp is the board package's (kits/sheng);
+# boot-args offline-key-events=1 sheng-aks=1 register the owned AppleKeyStore (no passcode, unlocked) for SpringBoard and keybagd.
+keystore_source = ROOT / 'kits/sheng/KeyStoreProbe.cpp'
+compile_cpp(keystore_source, OUT / 'KeyStoreProbe.o')
+print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
+keyevents = ROOT / 'build/apple-key-store-state'
+keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
+run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeKeyStoreEvents.cpp',
+     keyevents / 'NativeKeyStoreEvents.o', keyevents_late])
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeGOPPresenter'], text=True), end='')
 gop = ROOT / 'build/native-gop-presenter'
 gop_late = gop / 'NativeGOPPresenter.late.o'
@@ -407,7 +416,6 @@ stubs.write_text('''// SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOMemoryDescriptor.h>
 extern "C" {
 void native_hid_input_probe(void) {}
-void native_keystore_probe(void) {}
 void native_touch_probe(void) {}
 void sheng_cpufreq_probe(void) {}
 void sheng_gpu_power_probe(void) {}
@@ -432,10 +440,10 @@ compile_cpp(stubs, OUT / 'ZeusDisplayStubs.o')
 archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
-     OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o'])
+     OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
-           ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH]
+           ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source]
 
 
 def source_name(path):

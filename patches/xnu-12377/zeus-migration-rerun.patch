@@ -1,0 +1,42 @@
+--- a/bsd/kern/kern_exec.c	2026-11-18 02:04:49
++++ b/bsd/kern/kern_exec.c	2026-11-18 02:04:49
+@@ -8947,6 +8947,31 @@
+ 		kfree_data(path, MAXPATHLEN);
+ 	}
+ 	vnode_put(vp);
++}
++
++/*
++ * zeus (from UniXNU-aston aston-migration-rerun.patch): the installation seed carries com.apple.migration.plist, so datamigrator
++ * never runs the first-boot data migration that installs the system apps and makes their containers. With boot-arg
++ * sheng-rerun-migration=1 the marker is removed before launchd starts, and that boot's migration runs once (slow: minutes).
++ * Status for the boot log: 0 removed, ENOENT none there, -1 not asked.
++ */
++volatile int zeus_migration_rerun_status = -1;
++static void
++zeus_migration_rerun(proc_t p, user_addr_t scratch)
++{
++	static const char marker[] = "/private/var/mobile/Library/Preferences/com.apple.migration.plist";
++	uint32_t asked = 0;
++	if (!PE_parse_boot_argn("sheng-rerun-migration", &asked, sizeof(asked)) || asked != 1) {
++		return;
++	}
++	struct unlink_args request = {.path = scratch + 0xc00};
++	int32_t result = 0;
++	int error = copyout(marker, request.path, sizeof(marker));
++	if (!error) {
++		error = unlink(p, &request, &result);
++	}
++	zeus_migration_rerun_status = error;
++	printf("zeus-data: migration marker removal %d\n", error);
+ }
+ 
+ static int
+@@ -9007,6 +9032,7 @@
+ 	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
++	if (!error) zeus_migration_rerun(p, scratch);
+ 	if (!error) native_gpu_addon_prepare(p, scratch);
+ 	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
+ done:

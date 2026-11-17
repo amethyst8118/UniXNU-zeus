@@ -1,0 +1,36 @@
+--- a/ArmCpu.cpp	2026-11-17 19:15:46
++++ b/ArmCpu.cpp	2026-11-17 19:15:59
+@@ -34,6 +34,9 @@
+ volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];   // per logical core: architectural timer interrupts and SGI 0 taken
+ static bool gSpiIpi = false;                // boot-arg armcpu-spi-ipi=1: IPIs are software-pended SPIs 1008+core routed to that core (ICC_SGI1R_EL1 generates nothing on this board)
+ static bool gSelfIpi = false;               // boot-arg armcpu-self-ipi=1: every core sends itself SGI 0 from initCPU
++// zeus bisect, boot-arg armcpu-smp-park=N: 1 parks a secondary core at initCPU entry (before any GIC access), 2 after its GIC,
++// IPI and handler setup, before it is marked running. The core never joins the scheduler; processor_start stalls only its helper.
++static unsigned gSmpPark = 0;
+ volatile uint32_t armcpu_irq_phase = 0,armcpu_irq_id = 1023;
+ // IRQ drains (ArmCpu::interrupt takes interrupts until none is pending) that took more than 128, and the most one took. A burst
+ // of timer pops is normal under a hypervisor: a vCPU held off its core finds the next deadline rtclock_intr set already past
+@@ -332,6 +335,7 @@
+   if (ml_get_cpu_number (id) != ml_get_boot_cpu_number ()) {
+     unsigned smp = 0;
+     PE_parse_boot_argn ("smp", &smp, sizeof (smp));
++    PE_parse_boot_argn ("armcpu-smp-park", &gSmpPark, sizeof (gSmpPark));
+     if (smp == 0 || ml_get_cpu_number (id) < 0 || ml_get_cpu_number (id) >= ARMCPU_SMP_SLOTS) {
+       return nullptr; // Secondary startup is opt-in (smp=1).
+     }
+@@ -691,6 +695,7 @@
+     uint64_t mpidr;
+     __asm__ volatile ("mrs %0, mpidr_el1" : "=r" (mpidr));
+     armcpu_smp_seen_mpidr[logicalId] = static_cast<uint32_t> (mpidr);
++    if (gSmpPark == 1) { armcpu_smp_fail[logicalId] = 8; parkCore (); }
+     // A failure is recorded and the core parked (rather than a panic that hides the other cores' state).
+     if ((mpidr & 0xffff) != (affinity & 0xffff)) { armcpu_smp_fail[logicalId] = 1; parkCore (); }
+     if (!gRemoteGic && !wakeRedistributor (true)) { armcpu_smp_fail[logicalId] = 2; parkCore (); }
+@@ -701,6 +706,7 @@
+     // install their handler directly. ml_install_interrupt_handler() records it in the calling core's cpu_data.
+     ml_install_interrupt_handler (this, static_cast<int> (logicalId), this, reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
+     enableCPUTimeBase (true);
++    if (gSmpPark == 2) { armcpu_smp_fail[logicalId] = 9; parkCore (); }
+     setCPUState (kIOCPUStateRunning);
+     armcpu_smp_step[logicalId] = 7;
+     armcpu_smp_running = armcpu_smp_running + 1;

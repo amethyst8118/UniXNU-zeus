@@ -11,6 +11,8 @@
 //      (GENI_FW_REVISION_RO protocol: 1 SPI, 3 I2C; GENI_IF_DISABLE_RO; FIFO depth). Reset (GPIO 20) and the interrupt (21) are left
 //      alone, so the controller stays in reset. Offsets: Linux gcc-sm8450.c (SE4 0x274dc/0x274e4 bit 14, SE5 0x27610/0x27618 bit 15)
 //      and pinctrl-sm8450.c (qup4 and qup5 are function 1 on these pins).
+//   3  stage 2, then piece 3a: RPMh requests for the touch vdd (ldoc2, 1800 mV, high-power mode) and for bobc1 at 3600 mV, the
+//      input of pm8008j_l3 (3304 mV plus its 224 mV dropout). The PM8008 and the controller are not touched yet.
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
@@ -21,7 +23,7 @@ extern "C" void ml_io_unmap(vm_offset_t addr, vm_size_t sz);
 
 extern "C" {
 // Rows for the boot log ('#touch' lines, BootLog.c), filled once by the stage that ran.
-char zeus_touch_rows[6][200];
+char zeus_touch_rows[10][200];
 volatile uint32_t zeus_touch_stage = 0;
 }
 
@@ -196,6 +198,106 @@ void stage2(void) {
   snprintf(zeus_touch_rows[5], sizeof zeus_touch_rows[5], "#touch s2 %s | %s", c, d);
   IOLog("%s\n%s\n", zeus_touch_rows[4], zeus_touch_rows[5]);
 }
+
+// ---- stage 3a: RPMh requests for the touch supplies -------------------------------------------------------------------------
+// The command DB (0x80860000, aop_cmd_db_region) names each RPMh resource; the apps RSC's DRV2 (0x17a20000) sends requests
+// through command slot set 0 at +0xd00 (qcom,tcs-offset; an active set per qcom,tcs-config). Sequence as hakios-unicorn stfts.c.
+enum : uint64_t {CmdDbPhys = 0x80860000, CmdDbSize = 0x20000, RscDrv2 = 0x17a20000, RscSize = 0x10000};
+enum : uint32_t {
+  TcsBase = 0xd00, TcsIrqEnable = 0x00, TcsIrqStatus = 0x04, TcsIrqClear = 0x08, TcsWaitForCompletion = 0x10, TcsControl = 0x14,
+  TcsStatus = 0x18, TcsCmdEnable = 0x1c, TcsCtlEnable = 1u << 16, TcsCtlTrigger = 1u << 24, MsgIdWrite = 0x10008, MsgIdResponse = 0x100,
+};
+
+volatile uint8_t *gCmdDb;
+volatile uint32_t *gRsc;
+
+uint32_t dbRead(uint32_t at, unsigned bytes) {
+  uint32_t value = 0;
+  for (unsigned i = 0; i < bytes; ++i) value |= static_cast<uint32_t>(gCmdDb[at + i]) << (8 * i);
+  return value;
+}
+
+// The RPMh address of the named resource, or 0.
+uint32_t rpmhAddress(const char *name) {
+  if (!gCmdDb || dbRead(4, 4) != 0x0c0330dbu) return 0;
+  char id[8] = {0};
+  strlcpy(id, name, sizeof id);
+  const uint32_t data = 8 + 16 * 8 + 8;   // version, magic, eight 16-byte slave headers, checksum, reserved
+  for (unsigned sl = 0; sl < 8; ++sl) {
+    const uint32_t at = 8 + 16 * sl;
+    const uint32_t slaveId = dbRead(at, 2), headerOffset = dbRead(at + 2, 2), count = dbRead(at + 6, 2);
+    if (!slaveId || headerOffset >= CmdDbSize - 0x1000 || count > 512) continue;
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint32_t entry = data + headerOffset + 24 * i;   // id[8], priority[2], address, length, offset
+      bool same = true;
+      for (unsigned c = 0; c < 8 && same; ++c) same = gCmdDb[entry + c] == static_cast<uint8_t>(id[c]);
+      if (same) return dbRead(entry + 16, 4);
+    }
+  }
+  return 0;
+}
+
+uint32_t tcs(uint32_t reg) {return gRsc[(TcsBase + reg) / 4];}
+void tcsWrite(uint32_t reg, uint32_t value) {gRsc[(TcsBase + reg) / 4] = value;}
+
+// Up to three register writes through slot set 0; true once RPMh reports them done.
+bool rpmhWrite(const uint32_t *address, const uint32_t *data, unsigned count) {
+  for (unsigned i = 0; tcs(TcsStatus) == 0; ++i) {
+    if (i > 2000) return false;
+    IODelay(100);
+  }
+  const uint32_t irqEnable = tcs(TcsIrqEnable);
+  tcsWrite(TcsControl, tcs(TcsControl) & ~TcsCtlTrigger);
+  tcsWrite(TcsControl, tcs(TcsControl) & ~TcsCtlEnable);
+  tcsWrite(TcsIrqClear, 1);
+  for (unsigned i = 0; i < count; ++i) {
+    tcsWrite(0x30 + 20 * i, MsgIdWrite | MsgIdResponse);
+    tcsWrite(0x34 + 20 * i, address[i]);
+    tcsWrite(0x38 + 20 * i, data[i]);
+  }
+  tcsWrite(TcsWaitForCompletion, (1u << count) - 1);
+  tcsWrite(TcsCmdEnable, (1u << count) - 1);
+  tcsWrite(TcsIrqEnable, irqEnable | 1);
+  tcsWrite(TcsControl, TcsCtlEnable);
+  tcsWrite(TcsControl, TcsCtlEnable | TcsCtlTrigger);
+  bool done = false;
+  for (unsigned i = 0; i < 2000 && !done; ++i) {
+    done = tcs(TcsIrqStatus) & 1;
+    if (!done) IODelay(100);
+  }
+  tcsWrite(TcsControl, tcs(TcsControl) & ~TcsCtlTrigger);
+  tcsWrite(TcsControl, tcs(TcsControl) & ~TcsCtlEnable);
+  tcsWrite(TcsCmdEnable, 0);
+  tcsWrite(TcsWaitForCompletion, 0);
+  tcsWrite(TcsIrqClear, 1);
+  tcsWrite(TcsIrqEnable, irqEnable);
+  return done;
+}
+
+// A regulator (VRM: voltage at +0, enable at +4, mode at +8) on at mv; mode is written when nonzero.
+const char *vregOn(const char *name, uint32_t mv, uint32_t mode, uint32_t *addressOut) {
+  const uint32_t base = rpmhAddress(name);
+  *addressOut = base;
+  if (!base) return "not in the command DB";
+  if ((base >> 16 & 0xf) != 4) return "not a regulator address";
+  const uint32_t address[3] = {base, base + 4, base + 8}, data[3] = {mv, 1, mode};
+  return rpmhWrite(address, data, mode ? 3 : 2) ? nullptr : "RPMh did not complete";
+}
+
+void stage3a(void) {
+  gCmdDb = reinterpret_cast<volatile uint8_t *>(map(CmdDbPhys, CmdDbSize));
+  gRsc = map(RscDrv2, RscSize);
+  if (!gCmdDb || !gRsc) {
+    snprintf(zeus_touch_rows[6], sizeof zeus_touch_rows[6], "#touch s3a cmd-db or RSC not mapped");
+    return;
+  }
+  uint32_t ldo = 0, bob = 0;
+  const char *ldoWhy = vregOn("ldoc2", 1800, 7, &ldo);   // 7 = LDO high-power mode
+  const char *bobWhy = vregOn("bobc1", 3600, 0, &bob);
+  snprintf(zeus_touch_rows[6], sizeof zeus_touch_rows[6], "#touch s3a cmd-db magic %08x | ldoc2 @%05x 1800 mV: %s | bobc1 @%05x 3600 mV: %s",
+           dbRead(4, 4), ldo, ldoWhy ? ldoWhy : "done", bob, bobWhy ? bobWhy : "done");
+  IOLog("%s\n", zeus_touch_rows[6]);
+}
 }  // namespace
 
 extern "C" void native_touch_probe(void) {
@@ -206,4 +308,5 @@ extern "C" void native_touch_probe(void) {
   zeus_touch_stage = stage;
   stage1();
   if (stage >= 2) stage2();
+  if (stage >= 3) stage3a();
 }

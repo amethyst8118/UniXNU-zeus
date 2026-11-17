@@ -142,6 +142,10 @@ unique_chip_id = "required"
 # /sys/hypervisor/type = gunyah (api 1, variant 81); there is no Apple PMGR.
 vmm-present = 1
 sleep-disabled = 1
+# kern.maxvnodes: XNU caps memsize/64k + 1024 at CONFIG_VNODES, 1024 on iOS (MASTER.arm64 xsmall); a real device lifts
+# it through /defaults (PE_get_default). At 1024 memorystatus kept killing daemons ("vnode jetsam : 1024 desired,
+# 1950 numvnodes") once 8 cores ran ~280 processes. 65536 as guacamole (mkadt.py); the uncapped formula gives 74752.
+"kern.maxvnodes" = 65536
 
 [adt.product.string]
 # The framebuffer path is 8-bit until the panel driver lands; the panel is P3.

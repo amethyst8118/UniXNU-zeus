@@ -12,7 +12,9 @@
 //      alone, so the controller stays in reset. Offsets: Linux gcc-sm8450.c (SE4 0x274dc/0x274e4 bit 14, SE5 0x27610/0x27618 bit 15)
 //      and pinctrl-sm8450.c (qup4 and qup5 are function 1 on these pins).
 //   3  stage 2, then piece 3a: RPMh requests for the touch vdd (ldoc2, 1800 mV, high-power mode) and for bobc1 at 3600 mV, the
-//      input of pm8008j_l3 (3304 mV plus its 224 mV dropout). The PM8008 and the controller are not touched yet.
+//      input of pm8008j_l3 (3304 mV plus its 224 mV dropout). Piece 3b: GPIO 7 high (the PM8008's enable line), SE5 as a GENI
+//      I2C master (FIFO, 100 kHz), then PM8008 registers read only: REVID at 0xc, MISC_CHIP_ENABLE (0x950), L3's STATUS1, EN_CTL
+//      and VSET at 0xd. Nothing is written to the PM8008 and the controller is not touched yet.
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
@@ -165,6 +167,15 @@ void muxPin(unsigned pin, unsigned function, unsigned pull, unsigned ma) {
   unmap(p, 0x1000);
 }
 
+// A plain GPIO output (function 0, no pull, 2 mA): the level is set first, so the pin never drives the wrong one.
+void gpioOutputSimple(unsigned pin, bool high) {
+  volatile uint32_t *p = map(TlmmBase + TlmmStride * pin, 0x1000);
+  if (!p) return;
+  p[1] = high ? 2 : 0;
+  p[0] = 0 | 0u << 2 | (2 / 2 - 1) << 6 | 1u << 9;
+  unmap(p, 0x1000);
+}
+
 // GENI identity of the engine at phys (read only after its clock is on).
 void engineIdentity(uint64_t phys, char *row, unsigned cap, const char *name) {
   volatile uint32_t *se = map(phys, 0x4000);
@@ -298,6 +309,116 @@ void stage3a(void) {
            dbRead(4, 4), ldo, ldoWhy ? ldoWhy : "done", bob, bobWhy ? bobWhy : "done");
   IOLog("%s\n", zeus_touch_rows[6]);
 }
+
+// ---- stage 3b: SE5 as a GENI I2C master (FIFO mode), PM8008 registers read only ---------------------------------------------
+// Register offsets and command format: Linux i2c-qcom-geni.c and geni-se.h. 100 kHz from 19.2 MHz: divider 7, t_high 10,
+// t_low 12, t_cycle 26. Bytes pack low byte first into FIFO words (geni_se_config_packing 8 bits, 4 per word, MSB first bits).
+enum : uint32_t {
+  GeniForceDefault = 0x020, GeniOutputCtrl = 0x024, GeniCgcCtrl = 0x028, GeniStatus = 0x040, GeniSerMClkCfg = 0x048, GeniClkSel = 0x07c,
+  GeniByteGran = 0x254, GeniDmaModeEn = 0x258, GeniTxPack0 = 0x260, GeniTxPack1 = 0x264, I2cTxLen = 0x26c, I2cRxLen = 0x270,
+  I2cSclCounters = 0x278, GeniRxPack0 = 0x284, GeniRxPack1 = 0x288, GeniMCmd0 = 0x600, GeniMCmdCtrl = 0x604, GeniMIrqStatus = 0x610,
+  GeniMIrqEn = 0x614, GeniMIrqClear = 0x618, GeniSIrqClear = 0x648, GeniTxFifo = 0x700, GeniRxFifo = 0x780, GeniTxFifoStatus = 0x800,
+  GeniRxFifoStatus = 0x804, GeniTxWatermark = 0x80c, GeniRxWatermark = 0x810, GeniRxRfrWatermark = 0x814, SeDmaTxIrqClr = 0xc44,
+  SeDmaRxIrqClr = 0xd44, SeGsiEventEn = 0xe18, SeIrqEn = 0xe1c, SeDmaGeneralCfg = 0xe30,
+  MCmdDone = 1u << 0, MCmdCancel = 1u << 4, I2cErrors = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 10) | (1u << 12) | (1u << 13),
+  I2cOpWrite = 1, I2cOpRead = 2, StopStretch = 1u << 2,
+};
+
+volatile uint32_t *gI2c;
+uint32_t i2c(uint32_t reg) {return gI2c[reg / 4];}
+void i2cWrite(uint32_t reg, uint32_t value) {gI2c[reg / 4] = value;}
+
+void i2cInit(void) {
+  i2cWrite(SeGsiEventEn, 0);
+  i2cWrite(GeniMIrqClear, 0xffffffff);
+  i2cWrite(GeniSIrqClear, 0xffffffff);
+  i2cWrite(SeDmaTxIrqClr, 0xffffffff);
+  i2cWrite(SeDmaRxIrqClr, 0xffffffff);
+  i2cWrite(GeniCgcCtrl, i2c(GeniCgcCtrl) | 0x7f);
+  i2cWrite(SeDmaGeneralCfg, i2c(SeDmaGeneralCfg) | 0xf);
+  i2cWrite(GeniOutputCtrl, 0x7f);
+  i2cWrite(GeniForceDefault, 1);
+  i2cWrite(GeniDmaModeEn, i2c(GeniDmaModeEn) & ~1u);
+  i2cWrite(GeniRxWatermark, 15);
+  i2cWrite(GeniRxRfrWatermark, 16);
+  i2cWrite(GeniTxWatermark, 0);
+  i2cWrite(SeIrqEn, i2c(SeIrqEn) | 0xf);
+  i2cWrite(GeniMIrqEn, 0xffffffff);
+  i2cWrite(GeniTxPack0, 0x0007f8fe);
+  i2cWrite(GeniTxPack1, 0x000ffefe);
+  i2cWrite(GeniRxPack0, 0x0007f8fe);
+  i2cWrite(GeniRxPack1, 0x000ffefe);
+  i2cWrite(GeniByteGran, 0);
+  i2cWrite(GeniClkSel, 0);                                   // DFS preset 0: 19.2 MHz (stage 2)
+  i2cWrite(GeniSerMClkCfg, 7u << 4 | 1);
+  i2cWrite(I2cSclCounters, 10u << 20 | 12u << 10 | 26);
+}
+
+// Cancel a command that did not finish and empty the FIFOs.
+void i2cRecover(void) {
+  i2cWrite(GeniMCmdCtrl, 1u << 2);
+  for (unsigned i = 0; i < 2000 && !(i2c(GeniMIrqStatus) & MCmdCancel); ++i) IODelay(10);
+  for (unsigned i = 0; i < 64 && (i2c(GeniRxFifoStatus) & 0x01ffffff); ++i) (void)i2c(GeniRxFifo);
+  i2cWrite(GeniMIrqClear, 0xffffffff);
+}
+
+// One I2C command to the 7-bit address: write `length` bytes from tx, or read them into rx. stretch keeps the bus for a
+// repeated start. Returns the M_IRQ status on failure (nonzero), 0 on success.
+uint32_t i2cCommand(uint8_t address, bool read, const uint8_t *tx, uint8_t *rx, uint32_t length, bool stretch) {
+  for (unsigned i = 0; (i2c(GeniStatus) & 1) && i < 2000; ++i) IODelay(10);
+  i2cWrite(GeniMIrqClear, 0xffffffff);
+  i2cWrite(read ? I2cRxLen : I2cTxLen, length);
+  i2cWrite(GeniMCmd0, (read ? I2cOpRead : I2cOpWrite) << 27 | static_cast<uint32_t>(address) << 9 | (stretch ? StopStretch : 0));
+  uint32_t sent = 0, received = 0, status = 0;
+  for (unsigned spin = 0; spin < 20000; ++spin) {
+    while (!read && sent < length && (i2c(GeniTxFifoStatus) & 0x0fffffff) < 15) {
+      uint32_t word = 0;
+      for (unsigned j = 0; j < 4 && sent < length; ++j, ++sent) word |= static_cast<uint32_t>(tx[sent]) << (8 * j);
+      i2cWrite(GeniTxFifo, word);
+    }
+    if (read) {
+      const uint32_t words = i2c(GeniRxFifoStatus) & 0x01ffffff;
+      for (uint32_t w = 0; w < words; ++w) {
+        const uint32_t word = i2c(GeniRxFifo);
+        for (unsigned j = 0; j < 4 && received < length; ++j) rx[received++] = static_cast<uint8_t>(word >> (8 * j));
+      }
+    }
+    status = i2c(GeniMIrqStatus);
+    if (status & I2cErrors) break;
+    if ((status & MCmdDone) && (!read || received == length)) {
+      i2cWrite(GeniMIrqClear, status);
+      return 0;
+    }
+    IODelay(5);
+  }
+  i2cRecover();
+  return status ? status : 0x80000000u;
+}
+
+// A PM8008 register (16-bit address, i2c-pmic): write the address with a repeated start, then read one byte.
+uint32_t pmRead(uint8_t address, uint16_t reg, uint8_t *value) {
+  const uint8_t where[2] = {static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg)};
+  const uint32_t rc = i2cCommand(address, false, where, nullptr, 2, true);
+  return rc ? rc : i2cCommand(address, true, nullptr, value, 1, false);
+}
+
+void stage3b(void) {
+  gpioOutputSimple(7, true);                                  // pm8008j_active: the PM8008's enable line, output high
+  IOSleep(10);
+  gI2c = map(0x994000, 0x4000);
+  if (!gI2c) {snprintf(zeus_touch_rows[7], sizeof zeus_touch_rows[7], "#touch s3b SE5 not mapped"); return;}
+  i2cInit();
+  uint8_t rev[4] = {0}, st = 0, en = 0, lb = 0, ub = 0, chip = 0;
+  uint32_t rc = 0;
+  for (unsigned i = 0; i < 4 && !rc; ++i) rc = pmRead(0xc, static_cast<uint16_t>(0x0100 + 2 + i), &rev[i]);   // REVID: DIG_MINOR..ANA/subtype
+  const uint32_t rcChip = rc ? rc : pmRead(0xc, 0x0950, &chip);
+  const uint32_t rcL3 = rcChip ? rcChip : (pmRead(0xd, 0x4208, &st) | pmRead(0xd, 0x4246, &en) | pmRead(0xd, 0x4240, &lb) |
+                                          pmRead(0xd, 0x4241, &ub));
+  snprintf(zeus_touch_rows[7], sizeof zeus_touch_rows[7],
+           "#touch s3b i2c rc %08x/%08x/%08x | revid %02x %02x %02x %02x | chip_en 0950=%02x | l3 status %02x (ready %u) en %02x (on %u) vset %u mV",
+           rc, rcChip, rcL3, rev[0], rev[1], rev[2], rev[3], chip, st, st >> 7 & 1, en, en >> 7 & 1, static_cast<unsigned>(lb) | static_cast<unsigned>(ub) << 8);
+  IOLog("%s\n", zeus_touch_rows[7]);
+}
 }  // namespace
 
 extern "C" void native_touch_probe(void) {
@@ -309,4 +430,5 @@ extern "C" void native_touch_probe(void) {
   stage1();
   if (stage >= 2) stage2();
   if (stage >= 3) stage3a();
+  if (stage >= 3) stage3b();
 }

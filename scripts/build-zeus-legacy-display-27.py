@@ -396,6 +396,9 @@ compile_cpp(support, OUT / 'LegacyDisplaySupport27.o')
 # boot-args offline-key-events=1 sheng-aks=1 register the owned AppleKeyStore (no passcode, unlocked) for SpringBoard and keybagd.
 keystore_source = ROOT / 'kits/sheng/KeyStoreProbe.cpp'
 compile_cpp(keystore_source, OUT / 'KeyStoreProbe.o')
+# zeus touch bring-up (docs/TOUCH-PLAN.md): native_touch_probe, staged by sheng-touch=<n>.
+touch_source = ROOT / 'kits/sheng/ZeusTouchProbe.cpp'
+compile_cpp(touch_source, OUT / 'ZeusTouchProbe.o')
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
@@ -416,7 +419,6 @@ stubs.write_text('''// SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOMemoryDescriptor.h>
 extern "C" {
 void native_hid_input_probe(void) {}
-void native_touch_probe(void) {}
 void sheng_cpufreq_probe(void) {}
 void sheng_gpu_power_probe(void) {}
 void sheng_wifi_probe(void) {}
@@ -440,10 +442,10 @@ compile_cpp(stubs, OUT / 'ZeusDisplayStubs.o')
 archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
-     OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late])
+     OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o'])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
-           ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source]
+           ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]
 
 
 def source_name(path):

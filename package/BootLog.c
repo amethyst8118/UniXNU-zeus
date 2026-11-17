@@ -51,6 +51,8 @@ extern volatile uint32_t native_legacy_rej_rects[2][4] __attribute__((weak_impor
 extern char native_legacy_rej_class[32] __attribute__((weak_import));
 // Signals to started cores whose SIGPdisabled had never been cleared (xnu cpu_common.c sheng_sigp_recover).
 extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
+// ZeusTouchProbe.cpp: the rows of the touch stage that ran (sheng-touch=<n>), already "#touch ..." lines.
+extern char zeus_touch_rows[6][200] __attribute__((weak_import));
 // ArmCpu.cpp (armcpu-epss): EPSS domain 0's frequency table and its performance row before and after the write.
 extern volatile uint32_t armcpu_epss_lut[16] __attribute__((weak_import)), armcpu_epss_before __attribute__((weak_import)),
   armcpu_epss_after __attribute__((weak_import)), armcpu_epss_asked __attribute__((weak_import));
@@ -899,6 +901,9 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // '#' lines pass every log group filter: the core 1 thread ring.
   at = ring_rows(out, at, cap);
+  if (&zeus_touch_rows)
+    for (unsigned i = 0; i < 6; ++i)
+      if (zeus_touch_rows[i][0]) at = put(out, at, cap, zeus_touch_rows[i], sizeof zeus_touch_rows[i]);
   at = wdt_row(out, at, cap);
   at = epss_row(out, at, cap);
   if (&armcpu_smp_step) {

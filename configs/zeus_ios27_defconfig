@@ -9,7 +9,6 @@ CONFIG_XNU_ARMVIRT_PLATFORM=n
 CONFIG_XNU_KERNEL_CHAINED_FIXUPS=y
 # SM8450 UFS uses the waipio-adapted ShengUfs tree below.
 # CONFIG_XNU_NATIVE_ADRENO is not set
-# CONFIG_XNU_NATIVE_LEGACY_DISPLAY is not set
 # SM8450 UFS source storage: ShengUfs tree adapted to waipio; the cupid dummy
 # policy directory satisfies the build checks and the driver forces
 # NATIVE_VERIFIED_BLOCK=0 for the first root bring-up.
@@ -36,3 +35,6 @@ CONFIG_XNU_OWNER_BOOT_MANIFEST=y
 CONFIG_XNU_OWNER_DATA_MOUNT=y
 CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
 CONFIG_XNU_OWNER_DATA_VOLUME_UUID="00000000-0000-0000-0000-000000000000"
+# Display (CPU path): the owned GOP backend bound to the original IOMobileFramebufferLegacy of the iPhone17,2 fileset
+# (scripts/build-zeus-legacy-display-27.py, fixture legacy-display-24A446-d94ap.json from UniXNU-aston). No GPU.
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y

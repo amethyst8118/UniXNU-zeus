@@ -344,8 +344,8 @@ result = "boot-v4-ios27-ufsread.img on cupid: with SMMU stream 0xe0, SSU/TUR com
 
 [[area]]
 id = "display"
-status = "planned"
-components = []
+status = "implemented"
+components = ["GopFramebuffer"]
 paths = [
     "package/*Display*",
     "package/*Framebuffer*",

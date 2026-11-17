@@ -28,7 +28,7 @@ lba_bytes = 4096
 [components]
 # Stage 0. ArmDTPlatform, ArmCpu and XnuPrelink also come from the arm64e arch
 # profile; they are repeated here because arrays replace inherited arrays.
-include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengUfs", "RamBlock"]
+include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengUfs", "RamBlock", "GopFramebuffer"]
 
 [kernel]
 defconfig = "zeus_ios27_defconfig"
@@ -42,6 +42,8 @@ archives = [
   "component:ShengUfs",
   "component:RamBlock",
   "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446",
+  # Display: aston's iPhone17,2 (d94ap) IOMobileFramebufferLegacy binding on the firmware GOP framebuffer, CPU path.
+  "build-zeus-legacy-display-27.py",
 ]
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8450.config", "os:configs/ios.config"]
 patch_series = [
@@ -98,7 +100,7 @@ panic_screen = true
 # data-persist=2 (sheng): the 4 GiB Data seed is a "big" RAM disk (logical > 2 GiB) with no volatile mode; without
 # the persistent store every write returns kIOReturnNotReady ("disk1: device is not ready", boot log 6c39b67d7).
 # The store is a window just below the 1 GiB log reserve at the end of userdata (NativeUfs.cpp, guarded).
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "data-persist=2", "zeus-panic-after=300"]
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "data-persist=2", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=3", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "vsync=60", "vsync-fixed=1", "zeus-panic-after=300"]
 
 [payload.runtime]
 # Minimal iOS 27 runtime (sheng's [payload.runtime] without display, GPU addon,

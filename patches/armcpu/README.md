@@ -29,3 +29,5 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
   plus a 4 MiB memset/memcpy each pass. `armcpu_bound_passes` and `armcpu_bound_cpu` (MPIDR Aff1) count its passes.
 - `0008-zeus-smp-bound-panic.patch`: `armcpu-smp-bound=3`: the bound thread panics on core 1 at once (does a
   secondary core's panic stay on screen?).
+- `0009-zeus-smp-bound-split.patch`: `armcpu-smp-bound=4` computes forever after the first switch (no block, no timer of
+  its own); `=5` loops on `IOSleep (1)` with no work between (block and wake only).

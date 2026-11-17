@@ -95,7 +95,10 @@ panic_screen = true
 # 3170304 and rejects the missing manifest (cupid notes/ROOT-UFS.md).
 # zeus-panic-after=300 (patches/xnu-12377/zeus-panic-after.patch): diagnostic only, panics 300 s after
 # vfsinit with the kernel log tail on screen because ramoops is overwritten by the UEFI. Remove after.
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "zeus-panic-after=300"]
+# data-persist=2 (sheng): the 4 GiB Data seed is a "big" RAM disk (logical > 2 GiB) with no volatile mode; without
+# the persistent store every write returns kIOReturnNotReady ("disk1: device is not ready", boot log 6c39b67d7).
+# The store is a window just below the 1 GiB log reserve at the end of userdata (NativeUfs.cpp, guarded).
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "data-persist=2", "zeus-panic-after=300"]
 
 [payload.runtime]
 # Minimal iOS 27 runtime (sheng's [payload.runtime] without display, GPU addon,

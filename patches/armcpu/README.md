@@ -40,3 +40,5 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
 - `0012-zeus-smp-spin.patch`: `armcpu-smp-park=6` turns the timer and Group 1 off, masks DAIF and then spins forever with
   no WFI (pure execution, nothing for the hypervisor to deliver); `=7` spins the same way with the core's virtual timer
   firing every 1 ms while masked (a pending interrupt for a running vCPU). Neither joins the scheduler.
+- `0013-zeus-smp-bound-irq.patch`: `armcpu-smp-bound=6` spins with interrupts disabled (timer pending, never taken);
+  `=7` spins taking 1 kHz timer IRQs whose handler only re-arms the timer (no `rtclock_intr`, no scheduler work).

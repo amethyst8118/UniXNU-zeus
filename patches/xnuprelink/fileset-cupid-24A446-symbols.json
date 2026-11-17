@@ -1123,6 +1123,34 @@
       "original_sha256": "1f40347ba961d532d8575e8f9b32d5eb89f80fbe604b09695fb793c9de33275e",
       "native_symbol": "__ZN12OSDictionary14iterateObjectsEU13block_pointerFbPK8OSSymbolP8OSObjectE",
       "evidence": "Batch review 43795639174: stubbed import of sandbox, IOSurface, IOHIDFamily and IOAVFamily. The body saves updateStamp (+0xc), loops i < count (+0x14) over the 16-byte key/value entries of the signed dictionary pointer (+0x20, autda), calls the block's invoke pointer (block + 0x10, blraa with the address as discriminator) with (block, key, value), stops when it returns true or updateStamp changed, and returns initialUpdateStamp == updateStamp. That is OSDictionary::iterateObjects(bool (^)(const OSSymbol *, OSObject *)) with the callback form inlined (libkern/c++/OSDictionary.cpp). Bound before it was hit on the device."
+    },
+    {
+      "original": "0xfffffff00ac20880",
+      "original_size": 140,
+      "original_sha256": "e54771629d65498f627e64abfc9938f6c6e4d86062da80bb880052884e2d3d26",
+      "native_symbol": "_task_reference",
+      "evidence": "zeus panic 2026-11-17 (first boot past the AMFI stack-shift fix): com.apple.iokit.CoreAnalyticsFamily called this through its import stub (return 0xfffffff009b7179c, GOT 0xfffffff0081fbba0) on the IOUserClient open path (is_io_service_open_extended -> IOCommandGate::runAction) with x0 = the owning task. Body: NULL check, then the proc co-allocated before the task (task - 0x768) is checked against the read-only-pointer zone map and zone id 0x1a (ZONE_ID_PROC_TASK), then an os_ref retain on task + 0x10 with the overflow panic. That is task_reference(task_t) in osfmk/kern/task.c (zone_id_require + task ref_count retain); the native build's body differs only by the reference group. IOGPUFamily, IOHIDFamily, IOReportFamily and IOSurface import the same target."
+    },
+    {
+      "original": "0xfffffff00ac26044",
+      "original_size": 84,
+      "original_sha256": "15e9c81465efac6623f23e50ec9ccfe028aa75f4b8d009b2ad9962c2639727a8",
+      "native_symbol": "_thread_set_allocation_name",
+      "evidence": "Batch review 43795639174: stubbed import of IOGPUFamily. Reads the current thread's kernel state (tpidr_el1 + 0x150, signed pointer), loads the field at +0xc0, stores the argument there when the argument is NULL or the field is NULL, and returns the previous value: thread_set_allocation_name(kern_allocation_name_t) in osfmk/kern/thread.c (kstate->allocation_name, first-in wins). Bound before it was hit on the device."
+    },
+    {
+      "original": "0xfffffff00aca1d30",
+      "original_size": 32,
+      "original_sha256": "5fb51dd740f43c93bdf2a80fe754b033423025c869862799b89c4b5b92f72325",
+      "native_symbol": "_vm_map_page_size",
+      "evidence": "Batch review 43795639174: stubbed import of IOGPUFamily. Returns 1 << map->hdr.page_shift (byte at +0x2c), or 1 << 14 for a NULL map: vm_map_page_size(vm_map_t) (VM_MAP_PAGE_SIZE). The native 4K kernel answers 1 << 12 for a NULL map; callers pass a task map. Bound before it was hit on the device."
+    },
+    {
+      "original": "0xfffffff00ad449d0",
+      "original_size": 72,
+      "original_sha256": "70c01cf568a210d3abd5353036159dfac4da5df7290c552ff007139d1bec104c",
+      "native_symbol": "_OSKernelStackRemaining",
+      "evidence": "Batch review 43795639174: stubbed import of IOCryptoAcceleratorFamily. Leaf function: takes the address of a local, compares it with the current thread's kernel stack bounds (tpidr_el1 fields, 16 KiB stacks) and returns local - stack bottom: OSKernelStackRemaining() in libkern/gen/OSDebug.cpp / osfmk/arm64. Bound before it was hit on the device."
     }
   ],
   "data": [

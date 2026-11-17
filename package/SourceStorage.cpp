@@ -20,10 +20,7 @@
 // so provide the conservative definitions: the attach succeeds but mask
 // refuses, which leaves the transport in its working polled mode, and loader
 // memory is never released.
-extern "C" IOReturn armcpu_spi_mask(uint32_t, bool)
-{
-    return kIOReturnUnsupported;
-}
+// armcpu_spi_mask: ArmCpu a823383 exports the real one (UFS may now leave polled mode, as on sheng).
 extern "C" bool ml_static_mfree_prepare(vm_offset_t, vm_size_t)
 {
     return false;

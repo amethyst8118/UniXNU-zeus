@@ -95,7 +95,7 @@ panic_screen = true
 # 3170304 and rejects the missing manifest (cupid notes/ROOT-UFS.md).
 # zeus-panic-after=300 (patches/xnu-12377/zeus-panic-after.patch): diagnostic only, panics 300 s after
 # vfsinit with the kernel log tail on screen because ramoops is overwritten by the UEFI. Remove after.
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "zeus-panic-after=300"]
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "zeus-panic-after=300"]
 
 [payload.runtime]
 # Minimal iOS 27 runtime (sheng's [payload.runtime] without display, GPU addon,

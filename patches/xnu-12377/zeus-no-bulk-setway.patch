@@ -1,0 +1,18 @@
+--- a/osfmk/arm/cpuid.c	2026-11-17 22:07:45
++++ b/osfmk/arm/cpuid.c	2026-11-17 22:07:45
+@@ -516,6 +516,15 @@
+ 		cpuid_cache_info_p->c_bulksize_op = cpuid_cache_info_p->c_dsize;
+ 	}
+ 
++#if !defined(APPLE_ARM64_ARCH_FAMILY)
++	/*
++	 * zeus (SM8450 under Gunyah): no bulk set/way cache operations. A whole-cache clean or flush by set/way only reaches the
++	 * caches of the core that runs it, so with a second core dcache_incoherent_io_flush64/store64 and platform_cache_flush_wimg
++	 * miss the other core's dirty lines of a large DMA buffer or of memory turned uncached. Range operations by VA are broadcast.
++	 */
++	cpuid_cache_info_p->c_bulksize_op = 0;
++#endif
++
+ 	if (cpuid_cache_info_p->c_unified == 0) {
+ 		machine_write_csselr(CSSELR_L1, CSSELR_INSTR);
+ 		arm_cache_ccsidr_info.value = machine_read_ccsidr();

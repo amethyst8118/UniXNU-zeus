@@ -18,3 +18,6 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
   taken as a real exception on the held core (vector, `sleh_irq`, `ArmCpu::interrupt`); for a held core the handler only
   masks the timer and ends the interrupt (no `rtclock_intr`, no scheduler). Splits "the IRQ exception path on a secondary
   core" from "scheduler work on it".
+- `0005-zeus-smp-recommend.patch`: `armcpu-smp-recommend=MASK` sets the scheduler's recommended cores
+  (`sched_perfcontrol_update_recommended_cores`) from the first start thread. A core outside the mask comes online and
+  takes its timer and IPIs in its idle thread, but the scheduler places no thread on it.

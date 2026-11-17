@@ -1,0 +1,24 @@
+--- e/ArmCpu.cpp	2026-11-17 20:38:02
++++ f/ArmCpu.cpp	2026-11-17 21:04:48
+@@ -18,6 +18,7 @@
+ extern "C" kern_return_t processor_start (processor_t);
+ extern "C" kern_return_t kernel_thread_start (void (*) (void *, wait_result_t), void *, thread_t *);
+ extern "C" void thread_deallocate (thread_t);
++extern "C" void sched_perfcontrol_update_recommended_cores (uint32_t);   // exported for the perf controller (Private.arm64.exports)
+ extern "C" thread_t current_thread (void);
+ extern "C" kern_return_t thread_terminate (thread_t);
+ 
+@@ -677,6 +678,13 @@
+ {
+   ArmCpu *self = static_cast<ArmCpu *> (argument);
+   armcpu_smp_step[self->logicalId] = 3;
++  // zeus bisect, boot-arg armcpu-smp-recommend=MASK: the scheduler's recommended cores (bit per logical CPU) before the start. A core
++  // outside the mask comes online and takes its timer and IPIs in its idle thread, but the scheduler places no thread on it.
++  uint32_t recommend = 0;
++  if (PE_parse_boot_argn ("armcpu-smp-recommend", &recommend, sizeof (recommend)) && recommend != 0) {
++    static uint32_t applied = 0;
++    if (__atomic_exchange_n (&applied, 1U, __ATOMIC_ACQ_REL) == 0) { sched_perfcontrol_update_recommended_cores (recommend); }
++  }
+   // Kernels that leave the start to the driver block here until the new core reaches the scheduler; a core that never arrives only
+   // stalls this helper thread. Kernels that start a core when it registers return at once.
+   processor_start (self->machProcessor);

@@ -2,7 +2,4 @@ source-storage-runtime.patch
 zeus-panic-after.patch
 zeus-owner-cache-diag.patch
 zeus-initproc-crash.patch
-zeus-user-va-47.patch
-zeus-lockdown-mode-public.patch
-zeus-spawnattr-darwin26.patch
-zeus-kernel-stack-shift.patch
+zeus-sheng-ipados27-kernel.patch

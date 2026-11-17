@@ -591,6 +591,24 @@ static const char *log_step_max_where = "";
 #define LOG_AT(step) do {const uint64_t t_ = log_ticks(); \
     if (t_ - log_where_began > log_step_max) {log_step_max = t_ - log_where_began; log_step_max_where = log_where;} \
     log_where = (step); log_where_began = t_;} while (0)
+// The core 1 thread ring (ArmCpu.cpp, zeus SMP bisect) as '#smp1 ring' rows, newest first: name/pid/tid@ms of counter time.
+static size_t put(char *out, size_t at, size_t cap, const char *text, size_t max);
+static size_t ring_rows(char *out, size_t at, size_t cap) {
+  if (!&armcpu_ring_count || !armcpu_ring_count) return at;
+  uint64_t hz = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz)); if (!hz) hz = 19200000;
+  const uint32_t count = armcpu_ring_count, n = count < 16 ? count : 16;
+  char row[240];
+  int k = snprintf(row, sizeof row, "#smp1 ring %u:", count);
+  for (uint32_t i = 0; i < n && k > 0 && k < (int)sizeof row - 40; ++i) {
+    const uint32_t slot = (count - 1 - i) % 16;
+    char name[18]; memcpy(name, armcpu_ring_name[slot], 17); name[17] = 0;
+    k += snprintf(row + k, sizeof row - k, " %s/%d/%llu@%llu", name, armcpu_ring_pid[slot], (unsigned long long)armcpu_ring_tid[slot],
+                  (unsigned long long)(armcpu_ring_at[slot] * 1000 / hz));
+    if (i == 5 || i == 11) {at = put(out, at, cap, row, sizeof row); k = snprintf(row, sizeof row, "#smp1 ring+");}
+  }
+  return put(out, at, cap, row, sizeof row);
+}
+
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
   char head[128];
@@ -840,21 +858,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "[sigp] recovered=%u", sheng_sigp_recovered);
     at = put(out, at, cap, row, sizeof row);
   }
-  // '#' lines pass every log group filter: the core 1 thread ring, newest first, with the counter time in ms.
-  if (&armcpu_ring_count && armcpu_ring_count) {
-    uint64_t hz = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz)); if (!hz) hz = 19200000;
-    const uint32_t count = armcpu_ring_count, n = count < 16 ? count : 16;
-    char row[240];
-    int k = snprintf(row, sizeof row, "#smp1 ring %u:", count);
-    for (uint32_t i = 0; i < n && k > 0 && k < (int)sizeof row - 40; ++i) {
-      const uint32_t slot = (count - 1 - i) % 16;
-      char name[18]; memcpy(name, armcpu_ring_name[slot], 17); name[17] = 0;
-      k += snprintf(row + k, sizeof row - k, " %s/%d/%llu@%llu", name, armcpu_ring_pid[slot], (unsigned long long)armcpu_ring_tid[slot],
-                    (unsigned long long)(armcpu_ring_at[slot] * 1000 / hz));
-      if (i == 5 || i == 11) {at = put(out, at, cap, row, sizeof row); k = snprintf(row, sizeof row, "#smp1 ring+");}
-    }
-    at = put(out, at, cap, row, sizeof row);
-  }
+  // '#' lines pass every log group filter: the core 1 thread ring.
+  at = ring_rows(out, at, cap);
   if (&armcpu_smp_step) {
     char row[200];
     snprintf(row, sizeof row, "[smp] running=%u step=%u/%u/%u/%u fail=%u/%u/%u/%u timer=%u/%u/%u/%u ipi=%u/%u/%u/%u irq phase=%u id=%u held=%u",
@@ -2859,7 +2864,20 @@ static void writer(void *arg, wait_result_t result) {
       if (took > 4 * f) ++rounds_slow;
     }
     log_round_began = 0;
-    IOSleep(period_ms);
+    // zeus SMP bisect: while sleeping, a change of the core 1 thread ring is written at once into the header block (ring text from
+    // byte 2048; the header itself unchanged), so a power-off within one round still leaves the threads core 1 ran.
+    for (uint32_t slept = 0; slept < period_ms; slept += 2) {
+      IOSleep(2);
+      static uint32_t ring_flushed;
+      if (&armcpu_ring_count && armcpu_ring_count != ring_flushed && !boot_log_panicked) {
+        ring_flushed = armcpu_ring_count;
+        memset(boot_log_buffer, 0, LogBlock);
+        memcpy(boot_log_buffer, &h, sizeof h);
+        ring_rows((char *)boot_log_buffer + 2048, 0, LogBlock - 2048 - 1);
+        native_ufs_log_write(0, 1, boot_log_buffer);
+        native_ufs_log_sync();
+      }
+    }
   }
 }
 

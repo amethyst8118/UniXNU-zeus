@@ -1,26 +1,51 @@
 --- c/ArmCpu.cpp	2026-11-17 19:37:18
-+++ d/ArmCpu.cpp	2026-11-17 20:03:15
-@@ -3,6 +3,7 @@
- #include <IOKit/IODeviceTreeSupport.h>
- #include <IOKit/IOMemoryDescriptor.h>
- #include <IOKit/IOLocks.h>
-+#include <IOKit/IOLib.h>
- #include <libkern/c++/OSData.h>
- #include <libkern/c++/OSSymbol.h>
- #include <libkern/libkern.h>
-@@ -666,6 +667,15 @@
- {
-   ArmCpu *self = static_cast<ArmCpu *> (argument);
-   armcpu_smp_step[self->logicalId] = 3;
-+  // zeus bisect, boot-arg armcpu-smp-delay=N: start this core N seconds later, once the boot log writes rounds, so the log holds the
-+  // seconds before a failure that follows the start.
-+  unsigned delay = 0;
-+  PE_parse_boot_argn ("armcpu-smp-delay", &delay, sizeof (delay));
-+  if (delay != 0 && delay <= 600) {
-+    IOSleep (delay * 1000U);
-+    kprintf ("ArmCpu: starting CPU %u after %u s\n", self->logicalId, delay);
-+    IOLog ("ArmCpu: starting CPU %u after %u s\n", self->logicalId, delay);
-+  }
-   // Kernels that leave the start to the driver block here until the new core reaches the scheduler; a core that never arrives only
-   // stalls this helper thread. Kernels that start a core when it registers return at once.
-   processor_start (self->machProcessor);
++++ d/ArmCpu.cpp	2026-11-17 20:21:45
+@@ -37,6 +37,11 @@
+ // zeus bisect, boot-arg armcpu-smp-park=N: 1 parks a secondary core at initCPU entry (before any GIC access), 2 after its GIC,
+ // IPI and handler setup, before it is marked running. The core never joins the scheduler; processor_start stalls only its helper.
+ static unsigned gSmpPark = 0;
++// zeus bisect, boot-arg armcpu-smp-delay=N: a secondary core, its GIC and timer set up, waits in WFI on its own virtual timer
++// (10 ms steps, interrupts masked) until the counter reads N seconds of uptime, then joins the scheduler. The boot core does not
++// wait for it, so the boot log is writing rounds when the core starts to run threads.
++static unsigned gSmpDelay = 0;
++extern "C" { volatile uint32_t armcpu_smp_held[8]; }   // wake-ups counted while held (1 = holding)
+ // 3, 4 and 5 let the core run and join the scheduler with one interrupt source taken away: 3 no timer PPI 27 (IPIs work), 4 no IPI
+ // (timer works), 5 no interrupts at all (Group 1 off after the setup).
+ volatile uint32_t armcpu_irq_phase = 0,armcpu_irq_id = 1023;
+@@ -338,6 +343,7 @@
+     unsigned smp = 0;
+     PE_parse_boot_argn ("smp", &smp, sizeof (smp));
+     PE_parse_boot_argn ("armcpu-smp-park", &gSmpPark, sizeof (gSmpPark));
++    PE_parse_boot_argn ("armcpu-smp-delay", &gSmpDelay, sizeof (gSmpDelay));
+     if (smp == 0 || ml_get_cpu_number (id) < 0 || ml_get_cpu_number (id) >= ARMCPU_SMP_SLOTS) {
+       return nullptr; // Secondary startup is opt-in (smp=1).
+     }
+@@ -712,6 +718,28 @@
+     ml_install_interrupt_handler (this, static_cast<int> (logicalId), this, reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
+     enableCPUTimeBase (true);
+     if (gSmpPark == 2) { armcpu_smp_fail[logicalId] = 9; parkCore (); }
++    if (gSmpDelay != 0 && gSmpDelay <= 3600) {
++      uint64_t hz, now;
++      __asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (hz));
++      if (hz == 0) { hz = 19200000; }
++      const uint64_t until = static_cast<uint64_t> (gSmpDelay) * hz;
++      armcpu_smp_held[logicalId & 7] = 1;
++      for (;;) {
++        now = counter ();
++        if (now >= until) { break; }
++        const uint64_t next = now + hz / 100;
++        __asm__ volatile ("msr cntv_cval_el0, %0" :: "r" (next) : "memory");
++        const uint64_t on = 1;
++        __asm__ volatile ("msr cntv_ctl_el0, %0" :: "r" (on) : "memory");
++        __asm__ volatile ("isb" ::: "memory");
++        __asm__ volatile ("dsb sy" ::: "memory");
++        __asm__ volatile ("wfi" ::: "memory");
++        armcpu_smp_held[logicalId & 7] = armcpu_smp_held[logicalId & 7] + 1;
++      }
++      const uint64_t far = ~0ULL;
++      __asm__ volatile ("msr cntv_cval_el0, %0" :: "r" (far) : "memory");
++      __asm__ volatile ("isb" ::: "memory");
++    }
+     if (gSmpPark >= 3) { armcpu_smp_fail[logicalId] = 7 + gSmpPark; }
+     if (gSmpPark == 5) {
+       const uint64_t off = 0;

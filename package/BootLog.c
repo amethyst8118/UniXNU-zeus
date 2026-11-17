@@ -54,7 +54,7 @@ extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
 // ArmCpu.cpp secondary bring-up state (zeus SMP bisect): per logical core.
 extern volatile uint32_t armcpu_smp_step[8] __attribute__((weak_import)), armcpu_smp_fail[8] __attribute__((weak_import)),
   armcpu_core_timer[8] __attribute__((weak_import)), armcpu_core_sgi[8] __attribute__((weak_import)), armcpu_smp_running __attribute__((weak_import)),
-  armcpu_irq_phase __attribute__((weak_import)), armcpu_irq_id __attribute__((weak_import));
+  armcpu_irq_phase __attribute__((weak_import)), armcpu_irq_id __attribute__((weak_import)), armcpu_smp_held[8] __attribute__((weak_import));
 extern volatile uint32_t sheng_idle_sigp_cleared __attribute__((weak_import)), sheng_idle_sigp_refused __attribute__((weak_import)),
   sheng_idle_enter[8] __attribute__((weak_import)), sheng_idle_disallowed[8] __attribute__((weak_import));
 extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
@@ -837,10 +837,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (&armcpu_smp_step) {
     char row[200];
-    snprintf(row, sizeof row, "[smp] running=%u step=%u/%u/%u/%u fail=%u/%u/%u/%u timer=%u/%u/%u/%u ipi=%u/%u/%u/%u irq phase=%u id=%u",
+    snprintf(row, sizeof row, "[smp] running=%u step=%u/%u/%u/%u fail=%u/%u/%u/%u timer=%u/%u/%u/%u ipi=%u/%u/%u/%u irq phase=%u id=%u held=%u",
              armcpu_smp_running, armcpu_smp_step[0], armcpu_smp_step[1], armcpu_smp_step[2], armcpu_smp_step[3], armcpu_smp_fail[0],
              armcpu_smp_fail[1], armcpu_smp_fail[2], armcpu_smp_fail[3], armcpu_core_timer[0], armcpu_core_timer[1], armcpu_core_timer[2],
-             armcpu_core_timer[3], armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3], armcpu_irq_phase, armcpu_irq_id);
+             armcpu_core_timer[3], armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3], armcpu_irq_phase, armcpu_irq_id, &armcpu_smp_held ? armcpu_smp_held[1] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&sheng_idle_enter) {

@@ -37,3 +37,6 @@ Applied by the build inside `drivers/ArmCpu` (UniXNU/ArmCpu at the gitlink the b
 - `0011-zeus-smp-epss.patch`: `armcpu-epss=ROW`: before the first CPU_ON the boot core writes EPSS domain 0's PERF_STATE
   (A510 cores 0-3, 0x17d91000 + 0x320) and keeps the frequency table and the rows before and after; BootLog's `#epss` row
   prints them (MHz = 19.2 x lval).
+- `0012-zeus-smp-spin.patch`: `armcpu-smp-park=6` turns the timer and Group 1 off, masks DAIF and then spins forever with
+  no WFI (pure execution, nothing for the hypervisor to deliver); `=7` spins the same way with the core's virtual timer
+  firing every 1 ms while masked (a pending interrupt for a running vCPU). Neither joins the scheduler.

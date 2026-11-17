@@ -1,0 +1,34 @@
+--- l/ArmCpu.cpp	2026-11-17 23:54:04
++++ m/ArmCpu.cpp	2026-11-18 00:13:48
+@@ -860,6 +860,31 @@
+       }
+     }
+     if (gSmpPark == 2) { armcpu_smp_fail[logicalId] = 9; parkCore (); }
++    // 6: interrupts and the timer off, then execute forever without WFI (pure execution, nothing for Gunyah to deliver).
++    // 7: the same spin with this core's virtual timer firing every 1 ms while masked (a pending interrupt for a running vCPU).
++    if (gSmpPark == 6 || gSmpPark == 7) {
++      armcpu_smp_fail[logicalId] = 7 + gSmpPark;
++      __asm__ volatile ("msr daifset, #0xf" ::: "memory");
++      const uint64_t off = 0;
++      __asm__ volatile ("msr icc_igrpen1_el1, %0" :: "r" (off) : "memory");
++      uint64_t hz;
++      __asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (hz));
++      if (hz == 0) { hz = 19200000; }
++      const uint64_t ctl = gSmpPark == 7 ? 1 : 0;
++      __asm__ volatile ("msr cntv_ctl_el0, %0" :: "r" (ctl) : "memory");
++      __asm__ volatile ("isb" ::: "memory");
++      uint64_t next = counter () + hz / 1000;
++      for (;;) {
++        armcpu_smp_held[logicalId & 7] = armcpu_smp_held[logicalId & 7] + 1;
++        if (gSmpPark == 7) {
++          const uint64_t now = counter ();
++          if (now >= next) {
++            next = now + hz / 1000;
++            __asm__ volatile ("msr cntv_cval_el0, %0" :: "r" (next) : "memory");
++          }
++        }
++      }
++    }
+     if (gSmpDelay != 0 && gSmpDelay <= 3600) {
+       uint64_t hz, now;
+       __asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (hz));

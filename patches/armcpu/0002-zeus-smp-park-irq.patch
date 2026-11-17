@@ -1,0 +1,44 @@
+--- b/ArmCpu.cpp	2026-11-17 19:15:59
++++ c/ArmCpu.cpp	2026-11-17 19:37:18
+@@ -37,6 +37,8 @@
+ // zeus bisect, boot-arg armcpu-smp-park=N: 1 parks a secondary core at initCPU entry (before any GIC access), 2 after its GIC,
+ // IPI and handler setup, before it is marked running. The core never joins the scheduler; processor_start stalls only its helper.
+ static unsigned gSmpPark = 0;
++// 3, 4 and 5 let the core run and join the scheduler with one interrupt source taken away: 3 no timer PPI 27 (IPIs work), 4 no IPI
++// (timer works), 5 no interrupts at all (Group 1 off after the setup).
+ volatile uint32_t armcpu_irq_phase = 0,armcpu_irq_id = 1023;
+ // IRQ drains (ArmCpu::interrupt takes interrupts until none is pending) that took more than 128, and the most one took. A burst
+ // of timer pops is normal under a hypervisor: a vCPU held off its core finds the next deadline rtclock_intr set already past
+@@ -483,7 +485,10 @@
+   __asm__ volatile ("msr icc_bpr1_el1, %0" :: "r" (value) : "memory");
+   if (!secondary) { gBootAffinity = affinity & 0xff00ffffffULL; }
+   if (!secondary || !gRemoteGic) {
+-    write32 (redist + 0x10000, 0x100, kSgiPpiEnable);
++    uint32_t enable = kSgiPpiEnable;
++    if (secondary && gSmpPark == 3) { enable = 1U; }
++    if (secondary && gSmpPark == 4) { enable = 1U << 27; }
++    write32 (redist + 0x10000, 0x100, enable);
+     write32 (dist, 0, read32 (dist, 0) | 0x12U);
+   }
+   value = 1;
+@@ -701,12 +706,19 @@
+     if (!gRemoteGic && !wakeRedistributor (true)) { armcpu_smp_fail[logicalId] = 2; parkCore (); }
+     armcpu_smp_step[logicalId] = 6;
+     enableGic ();
+-    if (gSpiIpi) { spiIpiConfigure (gDist, logicalId, affinity); }
++    if (gSpiIpi && gSmpPark != 4) { spiIpiConfigure (gDist, logicalId, affinity); }
+     // The shared IOCPUInterruptController blocks registrations until every core is enabled, so the secondary cores
+     // install their handler directly. ml_install_interrupt_handler() records it in the calling core's cpu_data.
+     ml_install_interrupt_handler (this, static_cast<int> (logicalId), this, reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
+     enableCPUTimeBase (true);
+     if (gSmpPark == 2) { armcpu_smp_fail[logicalId] = 9; parkCore (); }
++    if (gSmpPark >= 3) { armcpu_smp_fail[logicalId] = 7 + gSmpPark; }
++    if (gSmpPark == 5) {
++      const uint64_t off = 0;
++      __asm__ volatile ("msr icc_igrpen1_el1, %0" :: "r" (off) : "memory");
++      __asm__ volatile ("dsb sy" ::: "memory");
++      __asm__ volatile ("isb" ::: "memory");
++    }
+     setCPUState (kIOCPUStateRunning);
+     armcpu_smp_step[logicalId] = 7;
+     armcpu_smp_running = armcpu_smp_running + 1;

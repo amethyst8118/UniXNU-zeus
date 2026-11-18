@@ -10,6 +10,8 @@
 //   5  as 4, then the GMU cold start: its own SMMU context (bank 1, SID 5 mask 0x400, native 4K tables), RSC/PDC setup, the private
 //      gmu_gen70000.bin embedded at build time, CM3 release, FW_INIT_RESULT and HFI ready. No RPMh vote and no GX. Register facts and
 //      the HFI table: diting DitingAdrenoGmu.c/DitingAdrenoHfi.c (BSD-2-Clause-Patent); GMU id 0x07030100 for chip 0x07030001 (gen7-0-1).
+//   6  as 5, then HFI messages: performance table (zeus DT levels, votes from the command DB), the A730 bandwidth table, CORE_FW_START, START,
+//      a vote for the lowest level (220 MHz), and OOB GPU_SET, which makes the GMU power GX. The request stays held. No GPU register is written.
 // A read of an unclocked block can reset the phone, so the log says what comes next and waits before each new block: the last line
 // on the USB log (zeus_usbeth_host.py) names the block. The run starts late (gpu-power-delay, seconds) so that link is up.
 #include <IOKit/IOLib.h>
@@ -138,6 +140,7 @@ bool gmuClocks(const gpb_result &r) {
 struct Dma {IOBufferMemoryDescriptor *keep; uint8_t *cpu; uint64_t pa; size_t bytes;};
 Dma gIcache, gDummy, gHfi, gLog, gTables;    // kept for the life of the boot: the GMU may use them at any time
 unsigned gTablesUsed;
+bool gGmuReady;
 constexpr unsigned kTablePages = 32, kGmuBank = 1, kGmuSmr = 2, kGmuSid = 5, kGmuSidMask = 0x400, kAsid = 1;
 constexpr uint32_t kIcacheIova = 0x4000, kDummyIova = 0x60000000, kHfiIova = 0x60002000, kLogIova = 0x60006000;
 constexpr uint32_t kGmuChipId = 0x07030100;
@@ -338,6 +341,154 @@ void gmuStart() {
   if (hfi) gmuWr(AO_AHB_FENCE_CTRL, 0);
   printf("ZEUS GPU: HFI_CTRL_STATUS %08x (%s)\n", gmuRd(HFI_CTRL_STATUS), hfi ? "HFI QUEUES STARTED" : "timeout");
   smmuReport("after HFI start");
+  gGmuReady = hfi;
+}
+
+// ---- Stage 6: HFI messages and GX power ----
+// The queues stay in cached memory for now, with cache maintenance around single, acknowledged exchanges. A real driver needs a non-cached view:
+// the queue indices of both directions share one cache line, which is safe here only because the GMU is idle between exchanges.
+enum : uint32_t {GMU2HOST_INTR_CLR = 0x1f991, GMU2HOST_INTR_INFO = 0x1f992, GMU2HOST_INTR_MASK = 0x1f993, HOST2GMU_INTR_SET = 0x1f994};
+constexpr uint32_t kDbBytes = 0x20000, kDbHeader = 144, kQueueWords = 1024;
+uintptr_t gDb;
+uint32_t gHfiSequence;
+uint32_t db32(uint32_t at) {return at + 4 <= kDbBytes ? rd32(gDb + at) : 0;}
+bool dbFind(const char *name, uint32_t *address, uint16_t *aux, unsigned *count) {
+  uint32_t key[2] = {0, 0};
+  for (unsigned i = 0; i < 8 && name[i]; ++i) key[i / 4] |= uint32_t(uint8_t(name[i])) << (8 * (i % 4));
+  for (unsigned slave = 0; slave < 8; ++slave) {
+    const uint32_t w0 = db32(8 + 16 * slave), w1 = db32(12 + 16 * slave), entries = kDbHeader + (w0 >> 16), data = kDbHeader + (w1 & 0xffff), n = w1 >> 16;
+    if (!(w0 & 0xffff) || n > 1024) continue;
+    for (uint32_t j = 0; j < n; ++j) {
+      const uint32_t e = entries + 24 * j;
+      if (db32(e) != key[0] || db32(e + 4) != key[1]) continue;
+      *address = db32(e + 16);
+      if (aux) {
+        const uint32_t info = db32(e + 20), at = data + (info >> 16);
+        unsigned words = (info & 0xffff) / 2;
+        if (words > *count) words = *count;
+        for (unsigned k = 0; k < words; ++k) {
+          const uint32_t byte = at + 2 * k;
+          const uint32_t lo = (db32(byte & ~3u) >> (8 * (byte & 3))) & 0xff, hi = (db32((byte + 1) & ~3u) >> (8 * ((byte + 1) & 3))) & 0xff;
+          aux[k] = uint16_t(lo | hi << 8);
+        }
+        *count = words;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+uint32_t arcVote(const uint16_t *primary, unsigned pn, const uint16_t *secondary, unsigned sn, uint32_t level) {
+  unsigned p = pn, q = 0;
+  for (unsigned i = 0; i < pn; ++i) if (primary[i] >= level) {p = i; break;}
+  if (p == pn) return 0;
+  for (unsigned i = 0; i < sn; ++i) {
+    if (secondary[i] >= level) {q = i; break;}
+    if (secondary[i]) q = i;
+  }
+  return (uint32_t(primary[p]) << 16) | (q << 8) | p;
+}
+bool hfiSend(const char *what, uint32_t id, const uint32_t *payload, unsigned words) {
+  volatile uint32_t *m = reinterpret_cast<volatile uint32_t *>(gHfi.cpu), *cmdq = m + 6, *rspq = m + 18;
+  volatile uint32_t *cmd = m + 212, *rsp = m + 212 + kQueueWords;
+  cleanCache(gHfi.cpu, gHfi.bytes);
+  const unsigned count = words + 1, padded = (count + 3) & ~3u;
+  uint32_t write = cmdq[11];
+  const uint32_t sequence = (++gHfiSequence) % 0xfff, header = (sequence << 20) | (count << 8) | id;
+  if (write >= kQueueWords || (write & 3)) {printf("ZEUS GPU: bad HFI write index %u\n", write); return false;}
+  cmd[write] = header;
+  for (unsigned i = 0; i < words; ++i) cmd[(write + 1 + i) & (kQueueWords - 1)] = payload[i];
+  for (unsigned i = count; i < padded; ++i) cmd[(write + i) & (kQueueWords - 1)] = 0xfafafafau;
+  write = (write + padded) & (kQueueWords - 1);
+  cmdq[11] = write;
+  cleanCache(gHfi.cpu, gHfi.bytes);
+  printf("ZEUS GPU: HFI send %s id %u, %u words, seq %u\n", what, id, words, sequence);
+  gmuWr(HOST2GMU_INTR_SET, 1);
+  for (unsigned tries = 0; tries < 8; ++tries) {
+    if (!gmuPoll(GMU2HOST_INTR_INFO, 1, 1)) continue;
+    gmuWr(GMU2HOST_INTR_CLR, 1);
+    cleanCache(gHfi.cpu, gHfi.bytes);
+    while (rspq[10] != rspq[11]) {
+      uint32_t read = rspq[10];
+      const uint32_t first = rsp[read], n = (first >> 8) & 255;
+      uint32_t packet[4] = {0, 0, 0, 0};
+      if (read >= kQueueWords || !n || n > 32) {printf("ZEUS GPU: corrupt HFI response %08x at %u\n", first, read); return false;}
+      for (unsigned i = 0; i < n && i < 4; ++i) packet[i] = rsp[(read + i) & (kQueueWords - 1)];
+      rspq[10] = (read + ((n + 3) & ~3u)) & (kQueueWords - 1);
+      cleanCache(gHfi.cpu, 0x100);
+      if ((first & 255) == 100) {printf("ZEUS GPU: GMU firmware error message, code %u\n", packet[1]); continue;}
+      if (((first >> 16) & 15) != 1 || (packet[1] >> 20) != sequence) continue;
+      printf("ZEUS GPU: HFI %s ack, error %u\n", what, packet[2]);
+      IODelay(200);
+      return packet[2] == 0;
+    }
+  }
+  printf("ZEUS GPU: no HFI ack for %s, INTR_INFO %08x, fw init %08x\n", what, gmuRd(GMU2HOST_INTR_INFO), gmuRd(CM3_FW_INIT_RESULT));
+  return false;
+}
+void gmuHfiAndGx() {
+  // Zeus DT qcom,gpu-pwrlevels in ascending order, with the off level first. Frequencies go to the GMU in kHz.
+  static const struct {uint32_t khz; uint16_t level;} kGpu[] = {{0, 0}, {220000, 56}, {285000, 56}, {317000, 64}, {350000, 64}, {421000, 80}, {492000, 128},
+      {545000, 144}, {599000, 192}, {640000, 224}, {734000, 256}, {791000, 320}, {818000, 384}};
+  static const struct {uint32_t khz; uint16_t level;} kGmu[] = {{0, 0}, {200000, 64}, {500000, 128}};
+  // Linux a730_build_bw_table: SH0, MC0 and ACV commands for the 12 DDR levels.
+  static const uint32_t kDdr[12][3] = {{0x40000000, 0x40000000, 0x40000000}, {0x600002e8, 0x600003d0, 0x60000008}, {0x6000068d, 0x6000089a, 0x60000008},
+      {0x600007f2, 0x60000a6e, 0x60000008}, {0x600009e5, 0x60000cfd, 0x60000008}, {0x60000b29, 0x60000ea6, 0x60000008}, {0x60001698, 0x60001da8, 0x60000008},
+      {0x600018d2, 0x60002093, 0x60000008}, {0x60001e66, 0x600027e6, 0x60000008}, {0x600027c2, 0x6000342f, 0x60000008}, {0x60002e71, 0x60003cf5, 0x60000008},
+      {0x600030ae, 0x60003fe5, 0x60000008}};
+  static uint16_t gfx[16], mx[16], cx[16];
+  static uint32_t perf[58], bw[159];
+  unsigned gn = 16, mn = 16, cn = 16;
+  uint32_t address = 0;
+  gDb = mapIo(kCmdDb, kDbBytes);
+  if (!gDb || db32(4) != 0x0c0330db || !dbFind("gfx.lvl", &address, gfx, &gn) || !dbFind("mx.lvl", &address, mx, &mn) || !dbFind("cx.lvl", &address, cx, &cn)) {
+    printf("ZEUS GPU: stage 6 stop: command DB levels missing\n");
+    return;
+  }
+  printf("ZEUS GPU: rails gfx %u levels (top %u), mx %u, cx %u\n", gn, gn ? gfx[gn - 1] : 0, mn, cn);
+  bzero(perf, sizeof perf);
+  bzero(bw, sizeof bw);
+  perf[0] = sizeof kGpu / sizeof kGpu[0];
+  perf[1] = sizeof kGmu / sizeof kGmu[0];
+  for (unsigned i = 0; i < perf[0]; ++i) {
+    perf[2 + 3 * i] = arcVote(gfx, gn, mx, mn, kGpu[i].level);
+    perf[3 + 3 * i] = 0xffffffffu;
+    perf[4 + 3 * i] = kGpu[i].khz;
+    if (kGpu[i].khz && !perf[2 + 3 * i]) {printf("ZEUS GPU: stage 6 stop: no vote for %u kHz\n", kGpu[i].khz); return;}
+  }
+  for (unsigned i = 0; i < perf[1]; ++i) {
+    perf[50 + 2 * i] = arcVote(cx, cn, mx, mn, kGmu[i].level);
+    perf[51 + 2 * i] = kGmu[i].khz;
+  }
+  bw[0] = 12; bw[2] = 3; bw[4] = 7;
+  if (!dbFind("SH0", &bw[23], nullptr, nullptr) || !dbFind("MC0", &bw[24], nullptr, nullptr) || !dbFind("ACV", &bw[25], nullptr, nullptr)) {
+    printf("ZEUS GPU: stage 6 stop: bandwidth resources missing\n");
+    return;
+  }
+  for (unsigned i = 0; i < 12; ++i) for (unsigned j = 0; j < 3; ++j) bw[31 + 8 * i + j] = kDdr[i][j];
+  printf("ZEUS GPU: votes 220 MHz %08x, 818 MHz %08x, GMU 200 MHz %08x; SH0 %x MC0 %x ACV %x\n", perf[5], perf[2 + 36], perf[52], bw[23], bw[24], bw[25]);
+  const uint32_t empty = 0, vote[3] = {1, 1, 3};   // blocking ack, GPU level 1 (220 MHz), bandwidth level 3
+  gmuWr(GMU2HOST_INTR_CLR, 0xffffffffu);
+  if (!hfiSend("PERF_TABLE", 4, perf, 58) || !hfiSend("BW_TABLE", 3, bw, 159) || !hfiSend("CORE_FW_START", 14, &empty, 1) || !hfiSend("START", 10, &empty, 1)) return;
+  gmuWr(GMU2HOST_INTR_CLR, 0xffffffffu);
+  gmuWr(GMU2HOST_INTR_MASK, ~1u);
+  if (!hfiSend("GX_BW_PERF_VOTE", 30, vote, 3)) return;
+  smmuReport("after HFI messages");
+  printf("ZEUS GPU: asking the GMU to power GX\n");
+  IOSleep(gPauseMs);
+  gmuWr(GMU2HOST_INTR_CLR, 1u << 31);
+  gmuWr(HOST2GMU_INTR_SET, 1u << 30);
+  const bool acked = gmuPoll(GMU2HOST_INTR_INFO, 1u << 31, 1u << 31);
+  const uint32_t gx = reg(GPB_WIN_GPUCC, GPB_CC_GX_GDSCR);
+  printf("ZEUS GPU: OOB GPU_SET %s, INTR_INFO %08x, GX GDSCR %08x (%s)\n", acked ? "acked" : "NOT acked", gmuRd(GMU2HOST_INTR_INFO), gx, gpb_gdsc_on(gx) ? "GX ON" : "GX off");
+  if (!acked) return;
+  gmuWr(GMU2HOST_INTR_CLR, 1u << 31);
+  if (gpb_gdsc_on(gx)) {
+    printf("ZEUS GPU: next block GPU core\n");
+    IOSleep(gPauseMs);
+    printf("ZEUS GPU: RBBM_STATUS %08x\n", reg(W_CORE, GPB_RBBM_STATUS_BYTES));
+  }
+  smmuReport("after GX request");
 }
 
 void run(unsigned mode) {
@@ -364,7 +515,10 @@ void run(unsigned mode) {
          k.pll1_opmode, k.pll1_l, k.pll1_user, k.gmu_cmd, k.gmu_cfg, k.hub_cmd, k.hub_cfg);
   printf("ZEUS GPU: branches cx_gmu %08x cxo %08x hub_cx_int %08x demet %08x axi %08x memnoc %08x gpll0 vote %08x\n", k.cx_gmu, k.cxo,
          k.hub_cx_int, k.demet, k.axi, k.memnoc, k.gpll0_vote);
-  if (mode >= 4 && gmuClocks(r) && mode >= 5) gmuStart();
+  if (mode >= 4 && gmuClocks(r) && mode >= 5) {
+    gmuStart();
+    if (mode >= 6 && gGmuReady) gmuHfiAndGx();
+  }
   printf("ZEUS GPU: next block AOP command DB\n");
   IOSleep(gPauseMs);
   if (const uintptr_t db = mapIo(kCmdDb, 0x1000))
@@ -386,7 +540,7 @@ extern "C" void sheng_gpu_power_probe(void) {
   PE_parse_boot_argn("gpu-power-delay", &gDelayS, sizeof(gDelayS));
   PE_parse_boot_argn("gpu-power-pause", &gPauseMs, sizeof(gPauseMs));
   if (!gMode) return;
-  if (gMode > 5) gMode = 5;
+  if (gMode > 6) gMode = 6;
   thread_t thread;
   if (kernel_thread_start(probeThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }

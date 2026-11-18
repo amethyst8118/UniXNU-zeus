@@ -160,10 +160,19 @@ bool engineClock(volatile uint32_t *qup, volatile uint32_t *vote, uint32_t cbcr,
   return on;
 }
 
+// The config word for a pin: pull [1:0], function [5:2], drive [8:6], output enable [9]. eGPIO-capable pins (bit 11 present,
+// e.g. GPIO 206/207 on SM8450) are claimed for this TLMM with bit 12, as msm_pinmux_set_mux() does for every non-egpio function;
+// without it the pin belongs to the other TLMM and the engine never reaches the bus.
+uint32_t pinConfig(uint32_t current, unsigned function, unsigned pull, unsigned ma, bool output) {
+  uint32_t value = pull | function << 2 | (ma / 2 - 1) << 6 | (output ? 1u << 9 : 0);
+  if (current & (1u << 11)) value |= (1u << 11) | (1u << 12);
+  return value;
+}
+
 void muxPin(unsigned pin, unsigned function, unsigned pull, unsigned ma) {
   volatile uint32_t *p = map(TlmmBase + TlmmStride * pin, 0x1000);
   if (!p) return;
-  p[0] = pull | function << 2 | (ma / 2 - 1) << 6;   // input direction; the engine drives its own lines
+  p[0] = pinConfig(p[0], function, pull, ma, false);   // input direction; the engine drives its own lines
   unmap(p, 0x1000);
 }
 
@@ -172,7 +181,7 @@ void gpioOutputSimple(unsigned pin, bool high) {
   volatile uint32_t *p = map(TlmmBase + TlmmStride * pin, 0x1000);
   if (!p) return;
   p[1] = high ? 2 : 0;
-  p[0] = 0 | 0u << 2 | (2 / 2 - 1) << 6 | 1u << 9;
+  p[0] = pinConfig(p[0], 0, 0, 2, true);
   unmap(p, 0x1000);
 }
 
@@ -408,6 +417,14 @@ void stage3b(void) {
   gI2c = map(0x994000, 0x4000);
   if (!gI2c) {snprintf(zeus_touch_rows[7], sizeof zeus_touch_rows[7], "#touch s3b SE5 not mapped"); return;}
   i2cInit();
+  uint32_t padCfg[2] = {0, 0}, padIo[2] = {0, 0};
+  for (unsigned i = 0; i < 2; ++i) {
+    volatile uint32_t *p = map(TlmmBase + TlmmStride * (206 + i), 0x1000);
+    if (p) {padCfg[i] = p[0]; padIo[i] = p[1]; unmap(p, 0x1000);}
+  }
+  snprintf(zeus_touch_rows[8], sizeof zeus_touch_rows[8], "#touch s3b pads 206 cfg %04x in %u | 207 cfg %04x in %u (bit 11 egpio present, 12 claimed)",
+           padCfg[0], padIo[0] & 1, padCfg[1], padIo[1] & 1);
+  IOLog("%s\n", zeus_touch_rows[8]);
   uint8_t rev[4] = {0}, st = 0, en = 0, lb = 0, ub = 0, chip = 0;
   uint32_t rc = 0;
   for (unsigned i = 0; i < 4 && !rc; ++i) rc = pmRead(0xc, static_cast<uint16_t>(0x0100 + 2 + i), &rev[i]);   // REVID: DIG_MINOR..ANA/subtype

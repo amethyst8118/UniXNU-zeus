@@ -6,8 +6,10 @@ Adreno 730: NativeAdrenoService.cpp and the ShengGmu platform files. package/Zeu
 no firmware. CONFIG_XNU_NATIVE_ADRENO force-loads it into the kernel; nothing in it starts the GPU by itself.
 """
 import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +56,29 @@ def compile_one(source):
     return obj
 
 
+# Diagnostic: ZEUS_ADRENO_SET=none links only the three symbols the display stubs need, to separate the driver's code from the build change.
+ADRENO_SET = os.environ.get('ZEUS_ADRENO_SET', 'all')
+archive = OUT / 'libAdreno740.a'
+if '--finish' in sys.argv:
+    if ADRENO_SET == 'none':
+        subprocess.run(['xcrun', 'ar', 'd', archive, 'NativeAdrenoAccelerator.late.o', 'original-bindings.o', 'original-addresses.o'], check=True)
+        print('zeus Adreno740 diagnostic: accelerator objects removed')
+    raise SystemExit(0)
+if ADRENO_SET == 'none':
+    stub = OUT / 'ZeusAdrenoNone.c'
+    stub.write_text('#include <stdbool.h>
+#include <stdint.h>
+void *native_adreno_published_service(void) {return 0;}
+'
+                    'bool native_adreno_fences_driver(uint32_t *a, uint32_t *b) {return false;}
+'
+                    'bool native_adreno_fences_detail_driver(uint32_t *a, uint32_t *b, uint32_t *c) {return false;}
+')
+    obj = compile_one(stub)
+    archive.unlink(missing_ok=True)
+    subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)
+    print('zeus Adreno740 diagnostic: no driver objects')
+    raise SystemExit(0)
 objects = [compile_one(source) for source in sources]
 # The display's fence wait must keep working while no GPU is published, so ZeusDisplayStubs wraps these two (see the display builder).
 llvm = Path(shutil.which('llvm-objcopy') or '/opt/homebrew/opt/llvm/bin/llvm-objcopy').parent
@@ -62,7 +87,6 @@ subprocess.run([llvm / 'llvm-objcopy', '--redefine-sym', '_native_adreno_fences=
                 '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver',
                 # The driver stays inert at boot: its classes register only when the GPU start asks for them.
                 '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoPublish.cpp', publish], check=True)
-archive = OUT / 'libAdreno740.a'
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects], check=True)
 print(f'zeus Adreno740 core: {len(objects)} objects in {archive.relative_to(ROOT)}')

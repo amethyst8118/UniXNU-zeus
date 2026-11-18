@@ -46,6 +46,7 @@ archives = [
   "build-zeus-adreno.py",
   "stage-zeus-accelerator-abi.py",
   "build-adreno740-accelerator.py",
+  "build-zeus-adreno.py --finish",
   # Display: aston's iPhone17,2 (d94ap) IOMobileFramebufferLegacy binding on the firmware GOP framebuffer, CPU path.
   # The keystore state service, built before the display archive that links its late object (as aston).
   "component:AppleKeyStoreState",

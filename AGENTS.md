@@ -14,8 +14,9 @@ iPhone iOS 27 one.
 - **Never guess a hardware value.** Cite mainline, vendor DTS or a measurement
   in `porting.toml`. SM8450 differs from SM8550 (UFS PHY `0x1d87000`, GMU PDC
   `0xb290000`); copying SM8550 values is a bug.
-- **Do not point Adreno 740 at an Adreno 730**, and do not enable
-  `CONFIG_XNU_NATIVE_ADRENO` until an Adreno730 component exists.
+- **Do not point Adreno 740 hardware setup at an Adreno 730.** Sheng's Adreno740
+  core is linked for its memory, ring, submit and client code; the A730 power,
+  GMU and CP setup stays in `package/ZeusGpuProbe.cpp`.
 - **Do not reuse ShengUfs.** It matches `qcom,sm8550-ufshc` and hardcodes
   SM8550 GCC offsets.
 - **Apple inputs are never committed.** Kernelcache, IPSW members, trust caches

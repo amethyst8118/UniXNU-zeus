@@ -449,11 +449,19 @@ void sheng_audio_probe(void) {}
 void sheng_backlight_probe(void) {}
 void sheng_dpu_probe(void) {}
 void aston_boot_screen_probe(void) {}
-// No GPU driver is linked: every frame is already written when its swap arrives (submitted == retired), and nothing is traced.
-bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *) {if(submitted)*submitted=0;if(retired)*retired=0;return true;}
-bool native_adreno_fences(uint32_t *submitted,uint32_t *retired) {return native_adreno_fences_detail(submitted,retired,nullptr);}
-int native_gpu_trace_enabled(void) {return 0;}
-void native_gpu_trace_record(uint32_t,uint32_t,const uint64_t *,uint32_t) {}
+// While no GPU is published every frame is already written when its swap arrives (submitted == retired).
+IOService *native_adreno_published_service();
+bool native_adreno_fences_detail_driver(uint32_t *,uint32_t *,uint32_t *);
+bool native_adreno_fences_driver(uint32_t *,uint32_t *);
+bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *detail) {
+    if(native_adreno_published_service())return native_adreno_fences_detail_driver(submitted,retired,detail);
+    if(detail){detail[0]=detail[1]=detail[2]=0;}
+    if(submitted)*submitted=0;if(retired)*retired=0;return true;
+}
+bool native_adreno_fences(uint32_t *submitted,uint32_t *retired) {
+    if(native_adreno_published_service())return native_adreno_fences_driver(submitted,retired);
+    if(submitted)*submitted=0;if(retired)*retired=0;return true;
+}
 }
 ''')
 compile_cpp(stubs, OUT / 'ZeusDisplayStubs.o')

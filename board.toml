@@ -28,7 +28,7 @@ lba_bytes = 4096
 [components]
 # Stage 0. ArmDTPlatform, ArmCpu and XnuPrelink also come from the arm64e arch
 # profile; they are repeated here because arrays replace inherited arrays.
-include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState"]
+include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal"]
 
 [kernel]
 defconfig = "zeus_ios27_defconfig"
@@ -42,6 +42,10 @@ archives = [
   "component:ShengUfs",
   "component:RamBlock",
   "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446",
+  # GPU: sheng's driver core without its A740 GMU platform, and the staged accelerator bound to this kernelcache. Inert unless gpu-power asks.
+  "build-zeus-adreno.py",
+  "stage-zeus-accelerator-abi.py",
+  "build-adreno740-accelerator.py",
   # Display: aston's iPhone17,2 (d94ap) IOMobileFramebufferLegacy binding on the firmware GOP framebuffer, CPU path.
   # The keystore state service, built before the display archive that links its late object (as aston).
   "component:AppleKeyStoreState",

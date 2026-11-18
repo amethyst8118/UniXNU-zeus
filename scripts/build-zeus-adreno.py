@@ -16,7 +16,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 DRIVER = ROOT / 'drivers/Adreno740'
 KITS = ROOT / 'kits'
 SKIP = {'NativeAdrenoService.cpp', 'NativeAdrenoClient.cpp', 'NativeAdrenoAccelerator.cpp', 'NativeAdrenoGmuConfig.cpp',
-        'NativeAdrenoGmuPlatform.cpp', 'NativeAdrenoKernelTime.cpp'}
+        'NativeAdrenoGmuPlatform.cpp', 'NativeAdrenoKernelTime.cpp', 'NativeAdrenoGmuService.cpp', 'NativeAdrenoSmmuService.cpp'}
 RECIPES = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 c_recipe = json.loads((RECIPES / 'bsd/DEVELOPMENT/bsd_init.o.json').read_text().strip().rstrip(','))
 cxx_recipe = json.loads((RECIPES / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
@@ -59,7 +59,9 @@ objects = [compile_one(source) for source in sources]
 llvm = Path(shutil.which('llvm-objcopy') or '/opt/homebrew/opt/llvm/bin/llvm-objcopy').parent
 publish = OUT / 'NativeAdrenoPublish.o'
 subprocess.run([llvm / 'llvm-objcopy', '--redefine-sym', '_native_adreno_fences=_native_adreno_fences_driver',
-                '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver', publish], check=True)
+                '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver',
+                # The driver stays inert at boot: its classes register only when the GPU start asks for them.
+                '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoPublish.cpp', publish], check=True)
 archive = OUT / 'libAdreno740.a'
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects], check=True)

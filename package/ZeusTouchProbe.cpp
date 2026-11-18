@@ -17,7 +17,10 @@
 //      and VSET at 0xd. Piece 3c: pm8008j_l3 to 3304 mV and on (EN_CTL bit 7), wait for VREG_READY. Piece 3d: SPI mode 0
 //      bit-banged on GPIO 16-19, reset (GPIO 20) low 10 ms then high, wait for 'controller ready' (event 0x03; else four-wire SPI
 //      and retry, up to 3 times), then the chip ID (0x20000000, 36 40 expected) and firmware bytes (0x20000004).
+//   4  stage 3, then piece 4a once the controller answered: sensing on (0xa0 00 01) and a kernel thread that drains the event
+//      FIFO while the interrupt line (GPIO 21) is low, every 8 ms; contacts are counted into the '#touch s4' row only.
 #include <IOKit/IOLib.h>
+#include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
 #include "BootResetCore.h"
@@ -542,8 +545,78 @@ bool ftsReset(uint8_t seen[4], unsigned *nSeen) {
   return false;
 }
 
-void stage3d(void) {
-  if (!pinsReady()) {snprintf(zeus_touch_rows[10], sizeof zeus_touch_rows[10], "#touch s3d pins not mapped"); return;}
+// ---- stage 4a: sensing on, raw contacts into the boot log ----------------------------------------------------------------------
+// Event layout (ST fts_enter/leave_pointer_event_handler, super-resolution): byte 1 = id << 4 | type, x = e[3] << 8 | e[2],
+// y = e[5] << 8 | e[4] (0..14400 x 0..32000 on zeus). 0xb5 in byte 1 of a leave is Xiaomi's fingerprint-area report.
+enum : uint8_t {EventEnter = 0x13, EventMotion = 0x23, EventLeave = 0x33};
+struct TouchStats {
+  uint32_t polls, events, downs, moves, ups, readies, errors, lastId, lastX, lastY, minX, maxX, minY, maxY;
+  uint8_t lastRaw[8];
+};
+TouchStats gTouch = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xffffffffu, 0, 0xffffffffu, 0, {0}};
+
+void ftsSenseOn(void) {
+  const uint8_t tx[3] = {0xa0, 0x00, 0x01};   // setScanMode(SCAN_MODE_ACTIVE, 0x01)
+  spiTransfer(tx, nullptr, sizeof tx);
+}
+
+void touchPublish(void) {
+  snprintf(zeus_touch_rows[11], sizeof zeus_touch_rows[11],
+           "#touch s4 polls %u events %u down %u move %u up %u ready %u err %u | last id %u x %u y %u | x %u..%u y %u..%u | raw %02x %02x %02x %02x %02x %02x",
+           gTouch.polls, gTouch.events, gTouch.downs, gTouch.moves, gTouch.ups, gTouch.readies, gTouch.errors, gTouch.lastId, gTouch.lastX,
+           gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX, gTouch.minY == 0xffffffffu ? 0 : gTouch.minY, gTouch.maxY,
+           gTouch.lastRaw[0], gTouch.lastRaw[1], gTouch.lastRaw[2], gTouch.lastRaw[3], gTouch.lastRaw[4], gTouch.lastRaw[5]);
+}
+
+void touchEvent(const uint8_t e[8]) {
+  ++gTouch.events;
+  memcpy(gTouch.lastRaw, e, 8);
+  if (e[0] == EventEnter || e[0] == EventMotion) {
+    const uint32_t id = e[1] >> 4, x = static_cast<uint32_t>(e[3]) << 8 | e[2], y = static_cast<uint32_t>(e[5]) << 8 | e[4];
+    if (e[0] == EventEnter) ++gTouch.downs; else ++gTouch.moves;
+    gTouch.lastId = id; gTouch.lastX = x; gTouch.lastY = y;
+    if (x < gTouch.minX) gTouch.minX = x;
+    if (x > gTouch.maxX) gTouch.maxX = x;
+    if (y < gTouch.minY) gTouch.minY = y;
+    if (y > gTouch.maxY) gTouch.maxY = y;
+  } else if (e[0] == EventLeave) {
+    if (e[1] != 0xb5) ++gTouch.ups;
+  } else if (e[0] == EventReady) {
+    ++gTouch.readies;   // the controller reset itself: sensing comes back off
+    ftsSenseOn();
+  } else if (e[0] == EventError) {
+    ++gTouch.errors;
+  }
+}
+
+// The report loop: while the interrupt line is low, drain the FIFO; otherwise look again in 8 ms.
+void touchLoop(void *, wait_result_t) {
+  for (;;) {
+    ++gTouch.polls;
+    for (unsigned i = 0; i < 32 && !pinGet(PinInt); ++i) {
+      uint8_t event[8];
+      ftsReadEvent(event);
+      if (!event[0]) break;
+      touchEvent(event);
+    }
+    if ((gTouch.polls & 31) == 0 || gTouch.events) touchPublish();
+    IOSleep(8);
+  }
+}
+
+void stage4a(void) {
+  ftsSenseOn();
+  touchPublish();
+  thread_t thread = nullptr;
+  if (kernel_thread_start(&touchLoop, nullptr, &thread) == KERN_SUCCESS) {
+    thread_deallocate(thread);
+  } else {
+    snprintf(zeus_touch_rows[11], sizeof zeus_touch_rows[11], "#touch s4 no report thread");
+  }
+}
+
+bool stage3d(void) {
+  if (!pinsReady()) {snprintf(zeus_touch_rows[10], sizeof zeus_touch_rows[10], "#touch s3d pins not mapped"); return false;}
   pinOut(PinReset, false, 3, 8);   // held in reset while the SPI lines settle (mi_ts_active: 8 mA, pull-up)
   pinIn(PinInt, 3, 8);
   pinOut(PinCs, true, 0, 8);
@@ -567,6 +640,7 @@ void stage3d(void) {
            ready ? "ready" : "NOT ready", attempts, seen[0], seen[1], seen[2], seen[3], id[0], id[1],
            id[0] == 0x36 && id[1] == 0x40 ? "FTM5 as expected" : "not 36 40", fw[0], fw[1], fw[2], fw[3], pinGet(PinInt) ? 1 : 0);
   IOLog("%s\n", zeus_touch_rows[10]);
+  return ready && id[0] == 0x36 && id[1] == 0x40;
 }
 
 void stage3b(void) {
@@ -607,5 +681,8 @@ extern "C" void native_touch_probe(void) {
   if (stage >= 3) stage3a();
   if (stage >= 3) stage3b();
   if (stage >= 3 && gI2c) stage3c();
-  if (stage >= 3 && gI2c) stage3d();
+  if (stage >= 3 && gI2c) {
+    const bool ready = stage3d();
+    if (stage >= 4 && ready) stage4a();
+  }
 }

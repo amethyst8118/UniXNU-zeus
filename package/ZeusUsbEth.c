@@ -27,6 +27,7 @@
 #include <arm/caches_internal.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_kern_xnu.h>   /* zeus iOS 27: kmem_alloc_contig and the KMA_ flags moved here */
 #include <pexpert/pexpert.h>
 #include <kern/locks.h>
 #include <sys/kpi_mbuf.h>
@@ -1342,7 +1343,7 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
 	socket_t so = NULL;
 	struct sockaddr_in me;
 
-	for (int tries = 0; so == NULL; tries++) {
+	while (so == NULL) {
 		if (sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so) != 0) {
 			so = NULL;
 			ud_sleep_ms(1000);

@@ -574,10 +574,20 @@ unsigned gFirstCount;
 struct HidContact { bool active; uint32_t x, y; };
 HidContact gContacts[10] = {};
 
-// FTS units: x 0..14400 (panel width, the short axis), y 0..32000 (panel height, the long axis). NativeHidInput maps xs against
-// 30480 (long) and ys against 20320 (short), so the long FTS axis (y) feeds xs and the short FTS axis (x) feeds ys.
-inline uint32_t scaleLong(uint32_t ftsY) { return ftsY >= 32000 ? 30479u : ftsY * 30480u / 32000u; }
-inline uint32_t scaleShort(uint32_t ftsX) { return ftsX >= 14400 ? 20319u : ftsX * 20320u / 14400u; }
+// FTS units: x 0..14400 (panel width, the short axis), y 0..32000 (panel height, the long axis), origin top left as iOS's.
+// As aston's TouchProbe: HID X is the panel's short axis (the framebuffer width), HID Y the long one, no rotation; each axis is
+// normalised to 0..32767, mirrored or swapped by sheng-touch-flip (bit 0 mirror X, bit 1 mirror Y, bit 2 swap), then rescaled to
+// the maxima NativeHidInput normalises against (30480 for xs, 20320 for ys; scale constants only, not panel axes).
+unsigned gFlip;
+inline uint32_t norm(uint32_t v, uint32_t max) { if (v >= max) v = max - 1; return static_cast<uint32_t>(static_cast<uint64_t>(v) * 32767u / (max - 1)); }
+void hidPoint(uint32_t ftsX, uint32_t ftsY, uint32_t *hx, uint32_t *hy) {
+  uint32_t x = norm(ftsX, 14400), y = norm(ftsY, 32000);
+  if (gFlip & 4) {const uint32_t t = x; x = y; y = t;}
+  if (gFlip & 1) x = 32767 - x;
+  if (gFlip & 2) y = 32767 - y;
+  *hx = static_cast<uint32_t>(static_cast<uint64_t>(x) * 30479u / 32767u);
+  *hy = static_cast<uint32_t>(static_cast<uint64_t>(y) * 20319u / 32767u);
+}
 
 void touchPublishHid(void) {
   native_touch_seq = native_touch_seq + 1;                 // odd: a write is in progress (seqlock)
@@ -585,7 +595,7 @@ void touchPublishHid(void) {
   unsigned n = 0;
   for (unsigned id = 0; id < 10 && n < 12; ++id)
     if (gContacts[id].active) {
-      native_touch_ids[n] = static_cast<int>(id);
+      native_touch_ids[n] = static_cast<int>(id) + 1;   // 1..10, as aston (FTS ids 0..9)
       native_touch_xs[n] = static_cast<int>(gContacts[id].x);
       native_touch_ys[n] = static_cast<int>(gContacts[id].y);
       ++n;
@@ -628,7 +638,7 @@ void touchEvent(const uint8_t e[8]) {
     if (x > gTouch.maxX) gTouch.maxX = x;
     if (y < gTouch.minY) gTouch.minY = y;
     if (y > gTouch.maxY) gTouch.maxY = y;
-    if (id < 10) { gContacts[id].active = true; gContacts[id].x = scaleLong(y); gContacts[id].y = scaleShort(x); }
+    if (id < 10) { gContacts[id].active = true; hidPoint(x, y, &gContacts[id].x, &gContacts[id].y); }
   } else if (e[0] == EventLeave) {
     if (e[1] != 0xb5) { ++gTouch.ups; const uint32_t id = e[1] >> 4; if (id < 10) gContacts[id].active = false; }
   } else if (e[0] == EventReady) {
@@ -675,6 +685,7 @@ void ftsThpOff(void) {
 }
 
 void stage4a(void) {
+  PE_parse_boot_argn("sheng-touch-flip", &gFlip, sizeof gFlip);
   ftsThpOff();
   ftsSenseOn();
   touchPublish();

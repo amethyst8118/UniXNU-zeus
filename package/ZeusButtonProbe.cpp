@@ -11,11 +11,11 @@
 // Every 20 ms one observer-channel read per peripheral; a change of the pressed set goes to the sink.
 // Arbiter layout as the mainline spmi-pmic-arb driver: version 5 maps APIDs at core + 0x900 + 4n (owner cnfg + 0x700 + 4n, observer
 // channel 0x10000 * EE + 0x80 * APID), version 7 at core + 0x2000 + 4n (owner cnfg + 4n, observer 0x8000 * EE + 0x20 * APID). The
-// version register (core + 0) picks one. BootResetCore.h knows version 7 only, which is why the touch probe's stage 1 lookup of
-// pm8350c_l2 found no APID on this SoC.
+// version register (core + 0) picks one. zeus reads 0x70000000 (version 7, 768 APIDs; PON at APID 407, GPIO 6 at 434).
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
+#include <kern/clock.h>
 #include <string.h>
 
 extern "C" vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, uint32_t flags);
@@ -32,7 +32,7 @@ volatile int32_t native_buttons_stats[10];
 
 namespace {
 constexpr uint64_t kCore = 0xc400000, kCoreSize = 0x3000, kObs = 0xc440000, kCnfg = 0xc42d000, kCnfgSize = 0x4000;
-constexpr uint32_t kPonPpid = 0x013, kGpioPpid = 0x18d;
+constexpr uint32_t kPonPpid = 0x013, kPbsPpid = 0x018, kGpioPpid = 0x18d;   // pon_hlos@1300, pon_pbs@1800 (reg-names of pon_hlos)
 constexpr uint8_t kRtSts = 0x10, kPowerBit = 1u << 7, kResinBit = 1u << 6, kGpioBit = 1u << 0;
 // Report 2 bits (NativeHidInput): 1 Power, 2 Volume Increment, 3 Volume Decrement.
 constexpr uint32_t kReportPower = 1u << 1, kReportVolumeUp = 1u << 2, kReportVolumeDown = 1u << 3;
@@ -47,6 +47,14 @@ Layout gLayout;
 uint32_t gVersion, gApids;
 int gPon = -1, gGpio = -1;
 uint8_t gRawPon, gRawGpio = 0xff;
+// Diagnostics (row 2): the PON debounce controls (PON_DBC_CTL 0x71 of pon_hlos and pon_pbs, read once) and, per key (power, volume
+// up, volume down), presses seen, last and shortest press in ms: a short press the poll sees but iOS ignores is iOS's; one the
+// poll never sees is the PMIC's debounce.
+int gPbs = -1;
+uint8_t gDbcHlos = 0xff, gDbcPbs = 0xff;
+uint32_t gPresses[3], gLastMs[3], gMinMs[3] = {0xffffffffu, 0xffffffffu, 0xffffffffu};
+uint64_t gDownAt[3];
+uint64_t nowMs() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns / 1000000u;}
 void (*volatile gSink)(void *, uint32_t);
 void *volatile gSinkContext;
 
@@ -100,10 +108,16 @@ bool setup() {
   native_buttons_stats[4] = gPon;
   native_buttons_stats[5] = gGpio;
   if (gPon < 0) {fail(4, -2); return false;}
-  const uint32_t top = static_cast<uint32_t>(gPon > gGpio ? gPon : gGpio) + 1;
+  const int pbs = findApid(kPbsPpid);
+  int highest = gPon > gGpio ? gPon : gGpio;
+  if (pbs > highest) highest = pbs;
+  const uint32_t top = static_cast<uint32_t>(highest) + 1;
   gObsSize = (static_cast<uint64_t>(gLayout.obsApidStride) * top + 0xfff) & ~0xfffull;
   gObs = map(kObs, gObsSize);
   if (!gObs) {fail(5, -12); return false;}
+  gPbs = findApid(kPbsPpid);
+  read8(gPon, 0x71, &gDbcHlos);
+  if (gPbs >= 0 && static_cast<uint32_t>(gPbs) < top) read8(gPbs, 0x71, &gDbcPbs);
   native_buttons_stats[0] = 2;
   return true;
 }
@@ -136,6 +150,28 @@ void publishRow() {
            native_buttons_stats[1], native_buttons_stats[8], native_buttons_stats[9], gSink != nullptr);
 }
 
+void publishDiag() {
+  snprintf(zeus_touch_rows[2], sizeof zeus_touch_rows[2],
+           "#btn dbc hlos %02x pbs %02x (apid %d) | pwr %u last %u min %u ms | up %u last %u min %u | down %u last %u min %u",
+           gDbcHlos, gDbcPbs, gPbs, gPresses[0], gLastMs[0], gMinMs[0] == 0xffffffffu ? 0 : gMinMs[0], gPresses[1], gLastMs[1],
+           gMinMs[1] == 0xffffffffu ? 0 : gMinMs[1], gPresses[2], gLastMs[2], gMinMs[2] == 0xffffffffu ? 0 : gMinMs[2]);
+}
+
+// Press timing per key from the edges of the pressed mask.
+void timeEdges(uint32_t last, uint32_t mask) {
+  const uint32_t bits[3] = {kReportPower, kReportVolumeUp, kReportVolumeDown};
+  const uint64_t now = nowMs();
+  for (unsigned k = 0; k < 3; ++k) {
+    const bool was = last & bits[k], is = mask & bits[k];
+    if (!was && is) {gDownAt[k] = now; ++gPresses[k];}
+    else if (was && !is) {
+      const uint32_t ms = static_cast<uint32_t>(now - gDownAt[k]);
+      gLastMs[k] = ms;
+      if (ms < gMinMs[k]) gMinMs[k] = ms;
+    }
+  }
+}
+
 void buttonsThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-buttons");
   if (!setup()) {
@@ -148,12 +184,13 @@ void buttonsThread(void *, wait_result_t) {
     const uint32_t mask = pressed();
     const bool changed = mask != last;
     if (changed) {
+      timeEdges(last, mask);
       last = mask;
       native_buttons_stats[3] = static_cast<int32_t>(mask);
       void (*sink)(void *, uint32_t) = __atomic_load_n(&gSink, __ATOMIC_ACQUIRE);
       if (sink) {sink(gSinkContext, mask); native_buttons_stats[2] = native_buttons_stats[2] + 1;}
     }
-    if (changed || polls % 50 == 0) publishRow();
+    if (changed || polls % 50 == 0) {publishRow(); publishDiag();}
     IOSleep(20);
   }
 }

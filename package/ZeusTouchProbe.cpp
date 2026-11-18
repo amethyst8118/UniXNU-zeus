@@ -550,10 +550,12 @@ bool ftsReset(uint8_t seen[4], unsigned *nSeen) {
 // y = e[5] << 8 | e[4] (0..14400 x 0..32000 on zeus). 0xb5 in byte 1 of a leave is Xiaomi's fingerprint-area report.
 enum : uint8_t {EventEnter = 0x13, EventMotion = 0x23, EventLeave = 0x33};
 struct TouchStats {
-  uint32_t polls, events, downs, moves, ups, readies, errors, lastId, lastX, lastY, minX, maxX, minY, maxY;
+  uint32_t polls, events, downs, moves, ups, readies, errors, lastId, lastX, lastY, minX, maxX, minY, maxY, intLow, forced;
   uint8_t lastRaw[8];
 };
-TouchStats gTouch = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xffffffffu, 0, 0xffffffffu, 0, {0}};
+TouchStats gTouch = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xffffffffu, 0, 0xffffffffu, 0, 0, 0, {0}};
+uint8_t gFirstEvents[8][8];
+unsigned gFirstCount;
 
 void ftsSenseOn(void) {
   const uint8_t tx[3] = {0xa0, 0x00, 0x01};   // setScanMode(SCAN_MODE_ACTIVE, 0x01)
@@ -562,15 +564,23 @@ void ftsSenseOn(void) {
 
 void touchPublish(void) {
   snprintf(zeus_touch_rows[11], sizeof zeus_touch_rows[11],
-           "#touch s4 polls %u events %u down %u move %u up %u ready %u err %u | last id %u x %u y %u | x %u..%u y %u..%u | raw %02x %02x %02x %02x %02x %02x",
-           gTouch.polls, gTouch.events, gTouch.downs, gTouch.moves, gTouch.ups, gTouch.readies, gTouch.errors, gTouch.lastId, gTouch.lastX,
-           gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX, gTouch.minY == 0xffffffffu ? 0 : gTouch.minY, gTouch.maxY,
-           gTouch.lastRaw[0], gTouch.lastRaw[1], gTouch.lastRaw[2], gTouch.lastRaw[3], gTouch.lastRaw[4], gTouch.lastRaw[5]);
+           "#touch s4 polls %u int-low %u forced %u events %u down %u move %u up %u ready %u err %u | last id %u x %u y %u | x %u..%u y %u..%u",
+           gTouch.polls, gTouch.intLow, gTouch.forced, gTouch.events, gTouch.downs, gTouch.moves, gTouch.ups, gTouch.readies, gTouch.errors,
+           gTouch.lastId, gTouch.lastX, gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX,
+           gTouch.minY == 0xffffffffu ? 0 : gTouch.minY, gTouch.maxY);
+  // The first non-zero events after sensing went on, as raw bytes (row 8, free after stage 3b's pad row was read).
+  char row[200];
+  int k = snprintf(row, sizeof row, "#touch s4 first events");
+  for (unsigned i = 0; i < gFirstCount && k > 0 && k < static_cast<int>(sizeof row) - 26; ++i)
+    k += snprintf(row + k, sizeof row - k, " | %02x %02x %02x %02x %02x %02x %02x %02x", gFirstEvents[i][0], gFirstEvents[i][1],
+                  gFirstEvents[i][2], gFirstEvents[i][3], gFirstEvents[i][4], gFirstEvents[i][5], gFirstEvents[i][6], gFirstEvents[i][7]);
+  strlcpy(zeus_touch_rows[8], row, sizeof zeus_touch_rows[8]);
 }
 
 void touchEvent(const uint8_t e[8]) {
   ++gTouch.events;
   memcpy(gTouch.lastRaw, e, 8);
+  if (gFirstCount < 8) memcpy(gFirstEvents[gFirstCount++], e, 8);
   if (e[0] == EventEnter || e[0] == EventMotion) {
     const uint32_t id = e[1] >> 4, x = static_cast<uint32_t>(e[3]) << 8 | e[2], y = static_cast<uint32_t>(e[5]) << 8 | e[4];
     if (e[0] == EventEnter) ++gTouch.downs; else ++gTouch.moves;
@@ -589,11 +599,16 @@ void touchEvent(const uint8_t e[8]) {
   }
 }
 
-// The report loop: while the interrupt line is low, drain the FIFO; otherwise look again in 8 ms.
+// The report loop: drain the FIFO when the interrupt line is low, and every tenth look (80 ms) whatever it reads, as hakios does
+// in case the line is missed; otherwise look again in 8 ms.
 void touchLoop(void *, wait_result_t) {
   for (;;) {
     ++gTouch.polls;
-    for (unsigned i = 0; i < 32 && !pinGet(PinInt); ++i) {
+    const bool low = !pinGet(PinInt);
+    if (low) ++gTouch.intLow;
+    const bool forced = !low && gTouch.polls % 10 == 0;
+    if (forced) ++gTouch.forced;
+    for (unsigned i = 0; i < 32 && (low || forced); ++i) {
       uint8_t event[8];
       ftsReadEvent(event);
       if (!event[0]) break;

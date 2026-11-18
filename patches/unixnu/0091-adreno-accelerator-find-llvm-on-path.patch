@@ -1,0 +1,12 @@
+--- a/scripts/build-adreno740-accelerator.py	2026-11-19 00:58:30
++++ b/scripts/build-adreno740-accelerator.py	2026-11-19 00:58:30
+@@ -121,7 +121,8 @@
+     asm.write_text(''.join(f'.globl {n}\n.set {n}, {a:#x}\n' for n, a in sorted(bindings.items()) if n in undefined))
+ run(['xcrun', 'clang', '-target', TRIPLE, '-isysroot', sdk, '-c', asm, '-o', OUT / 'original-bindings.o'])
+ 
+-llvm = Path(run(['brew', '--prefix', 'llvm'], text=True).strip()) / 'bin'
++import shutil
++llvm = Path(shutil.which('llvm-objcopy') or '/opt/homebrew/opt/llvm/bin/llvm-objcopy').parent
+ late = OUT / 'NativeAdrenoAccelerator.late.o'
+ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func',
+      '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoAccelerator.cpp', obj, late])

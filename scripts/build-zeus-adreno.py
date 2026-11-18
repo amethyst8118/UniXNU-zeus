@@ -6,6 +6,7 @@ Adreno 730: NativeAdrenoService.cpp and the ShengGmu platform files. package/Zeu
 no firmware. CONFIG_XNU_NATIVE_ADRENO force-loads it into the kernel; nothing in it starts the GPU by itself.
 """
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def compile_one(source):
 
 objects = [compile_one(source) for source in sources]
 # The display's fence wait must keep working while no GPU is published, so ZeusDisplayStubs wraps these two (see the display builder).
-llvm = Path(subprocess.check_output(['brew', '--prefix', 'llvm'], text=True).strip()) / 'bin'
+llvm = Path(shutil.which('llvm-objcopy') or '/opt/homebrew/opt/llvm/bin/llvm-objcopy').parent
 publish = OUT / 'NativeAdrenoPublish.o'
 subprocess.run([llvm / 'llvm-objcopy', '--redefine-sym', '_native_adreno_fences=_native_adreno_fences_driver',
                 '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver', publish], check=True)

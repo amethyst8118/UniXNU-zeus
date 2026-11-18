@@ -38,6 +38,12 @@ volatile uint32_t zeus_touch_stage = 0;
 // (0..30480 long, 0..20320 short) for up to 12 fingers. 4c fills these from the FTS; zeroed here so the HID device has no fingers.
 volatile uint32_t native_touch_seq = 0, native_touch_count = 0, native_touch_hid_reports = 0;
 volatile int native_touch_xs[12] = {0}, native_touch_ys[12] = {0}, native_touch_ids[12] = {0};
+// NativeHidInput registers a sink here (an arm64e static link needs these defined, not just weak-imported); the FTS report loop
+// calls it after each contact update (4c). The buttons sink is unused on zeus but must resolve too.
+static void (*gTouchSink)(void *) = nullptr;
+static void *gTouchSinkContext = nullptr;
+void native_touch_set_sink(void (*fn)(void *), void *context) { gTouchSink = fn; gTouchSinkContext = context; }
+void native_buttons_set_sink(void (*)(void *, uint32_t), void *) {}
 }
 
 namespace {

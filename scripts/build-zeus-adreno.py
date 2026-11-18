@@ -57,11 +57,11 @@ def compile_one(source):
 
 
 # Diagnostic: ZEUS_ADRENO_SET=none links only the symbols the display stubs need; =pad adds inert code and data of the driver's size,
-# to separate the driver's content from the kernel layout change.
+# to separate the driver's content from the kernel layout change; =noaccel keeps the driver core without the staged accelerator.
 ADRENO_SET = os.environ.get('ZEUS_ADRENO_SET', 'all')
 archive = OUT / 'libAdreno740.a'
 if '--finish' in sys.argv:
-    if ADRENO_SET in ('none', 'pad'):
+    if ADRENO_SET in ('none', 'pad', 'noaccel'):
         subprocess.run(['xcrun', 'ar', 'd', archive, 'NativeAdrenoAccelerator.late.o', 'original-bindings.o', 'original-addresses.o'], check=True)
         print('zeus Adreno740 diagnostic: accelerator objects removed')
     raise SystemExit(0)

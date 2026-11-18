@@ -404,6 +404,8 @@ compile_cpp(touch_source, OUT / 'ZeusTouchProbe.o')
 compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
 # CPU frequency (sheng CpuFreqProbe, zeus clusters): sheng_cpufreq_probe, cpufreq=<mode>; needs zzye-sheng-cpu-idle.patch.
 compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
+# zeus USB bring-up (docs/USB-PLAN.md): sheng_usb_probe, staged by zeus-usb=<n>.
+compile_cpp(ROOT / 'kits/sheng/ZeusUsbProbe.cpp', OUT / 'ZeusUsbProbe.o')
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
@@ -426,7 +428,6 @@ extern "C" {
 void sheng_gpu_power_probe(void) {}
 void sheng_wifi_probe(void) {}
 void sheng_bluetooth_probe(void) {}
-void sheng_usb_probe(void) {}
 void sheng_adsp_probe(void) {}
 void sheng_battery_probe(void) {}
 void sheng_audio_probe(void) {}
@@ -530,7 +531,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o',
-     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
+     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'ZeusUsbProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]

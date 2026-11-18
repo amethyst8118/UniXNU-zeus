@@ -781,7 +781,15 @@ void enterRole(int role) {
     } else {
         QcomDwc3Nub::route(gDeviceNub);
         // A USB host on the cable: lockdownd's launch event, then the family goes on the bus when configd's description arrives.
-        IOService::getResourceService()->setProperty("AppleUSBCableType", "USBHost");
+        // publishResource, not setProperty: lockdownd's launch event com.apple.lockdown.USBHost is an IOKit match on IOResources with
+        // AppleUSBCableType = USBHost, and a property change alone sends no match notification. publishResource re-registers
+        // IOResources (gIOResourceGenerationCount++, registerService), so launchd sees it whenever the role is entered. zeus usb3 (log
+        // 297f82a4): with setProperty lockdownd never ran in 1670 s, configd's USBDeviceConfiguration stayed at "Waiting for lockdownd",
+        // and the family never configured or powered the controller.
+        if (OSString *cable = OSString::withCString("USBHost")) {
+            IOService::publishResource("AppleUSBCableType", cable);
+            cable->release();
+        }
         IOReturn powered = gController->cable(true);
         // zeus: no UCSI answer to wait for, so the device role is entered right after publish, before the controller's power management
         // is initialised (usb2 log 2975e358: changePowerStateTo -> IOPMNotYetInitialized, no powerOn). Retry until it is, 60 s at most;

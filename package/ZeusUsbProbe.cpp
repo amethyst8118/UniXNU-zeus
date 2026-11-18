@@ -42,9 +42,6 @@ extern "C" int proc_iterate(unsigned int flags, int (*callout)(struct proc *, vo
                             void *filterarg);
 extern "C" int proc_pid(struct proc *);
 extern "C" void proc_name(int pid, char *buf, int size);
-extern "C" task_t proc_task(struct proc *);
-// ZeusLockdownPatch.c: lockdownd without the optional FairPlay/CESM bring-up (its startup hangs there on zeus).
-extern "C" int zeus_lockdown_patch_task(task_t task, uint64_t *base, uint32_t *page);
 
 extern "C" {
 // '#usb' rows 4-6 of the boot log's touch rows (ZeusTouchProbe.cpp; free once the touch report thread runs, before this probe).
@@ -146,34 +143,6 @@ int procVisit(struct proc *p, void *arg) {
   else if (!strcmp(name, "configd")) found->configd = pid;
   return 0;   // PROC_RETURNED
 }
-// lockdownd patch state for the '#usb dg' row: pid, result (0 patched, 1 already, -1 no base yet, -2 page not mapped, -3 other code,
-// 99 not seen), slid header address, physical page; ldTries counts the polls until the result settled.
-struct LdState {int pid, result; uint64_t base; uint32_t page, tries;};
-LdState gLd = {0, 99, 0, 0, 0};
-int ldVisit(struct proc *p, void *) {
-  char name[32] = {0};
-  const int pid = proc_pid(p);
-  proc_name(pid, name, sizeof name);
-  if (strcmp(name, "lockdownd")) return 0;
-  if (pid == gLd.pid && (gLd.result == 0 || gLd.result == 1 || gLd.result == -3)) return 0;   // settled for this lockdownd
-  uint64_t base = 0;
-  uint32_t page = 0;
-  const int result = zeus_lockdown_patch_task(proc_task(p), &base, &page);
-  if (pid != gLd.pid) gLd.tries = 0;
-  gLd.pid = pid; gLd.result = result; gLd.base = base; gLd.page = page; ++gLd.tries;
-  if (result == 0) IOLog("zeus-usb: lockdownd %d CESM bring-up skipped (header %llx, page %x)\n", pid, base, page);
-  else if (result == -3) IOLog("zeus-usb: lockdownd %d: unexpected code at the CESM site, left alone\n", pid);
-  return 0;
-}
-void ldThread(void *, wait_result_t) {
-  thread_set_thread_name(current_thread(), "zeus-lockdownd");
-  for (;;) {
-    proc_iterate(1 /* PROC_ALLPROCLIST */, ldVisit, nullptr, nullptr, nullptr);
-    const bool settled = gLd.result == 0 || gLd.result == 1 || gLd.result == -3;
-    IOSleep(settled ? 1000 : 20);   // the page is mapped ~5 s before lockdownd reaches the calls
-  }
-}
-
 void diagRow() {
   Procs procs = {0, 0, 0};
   proc_iterate(1 /* PROC_ALLPROCLIST */, procVisit, &procs, nullptr, nullptr);
@@ -199,8 +168,8 @@ void diagRow() {
   }
   const bool cable = IOService::getResourceService()->getProperty("AppleUSBCableType") != nullptr;
   snprintf(zeus_touch_rows[0], sizeof zeus_touch_rows[0],
-           "#usb dg ctl %d state %x match %d cable %d | lockdownd %d configd %d procs %d | ldp %d/%d %llx %x n%u | kids %u:%s", c != nullptr,
-           state, matchable, cable, procs.lockdownd, procs.configd, procs.count, gLd.pid, gLd.result, gLd.base, gLd.page, gLd.tries, nKids, kids);
+           "#usb dg ctl %d state %x match %d cable %d | lockdownd %d configd %d procs %d | kids %u:%s", c != nullptr, state, matchable, cable,
+           procs.lockdownd, procs.configd, procs.count, nKids, kids);
 }
 
 void usbThread(void *, wait_result_t) {
@@ -208,8 +177,6 @@ void usbThread(void *, wait_result_t) {
   stage1();
   zeus_usb_stage = 1;
   if (gStage >= 2) {
-    thread_t ld = nullptr;
-    if (kernel_thread_start(ldThread, nullptr, &ld) == KERN_SUCCESS) thread_deallocate(ld);
     // The Apple stack on its own thread, so this one keeps the rows alive whatever it waits on.
     thread_t worker = nullptr;
     if (kernel_thread_start([](void *, wait_result_t) {appleStack(); thread_terminate(current_thread());}, nullptr, &worker) ==

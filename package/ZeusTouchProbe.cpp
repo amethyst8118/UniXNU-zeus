@@ -569,6 +569,34 @@ TouchStats gTouch = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xffffffffu, 0, 0xffffffffu, 
 uint8_t gFirstEvents[8][8];
 unsigned gFirstCount;
 
+// ---- stage 4c: publish the active contacts to NativeHidInput (ShengHidInput) --------------------------------------------------
+// The FTS reports per-finger enter/motion/leave events; this keeps the current set, already scaled to the touch core's axis
+// maxima, and publishes it under native_touch_seq after each FIFO drain, then calls the sink NativeHidInput registered.
+struct HidContact { bool active; uint32_t x, y; };
+HidContact gContacts[10] = {};
+
+// FTS units: x 0..14400 (panel width, the short axis), y 0..32000 (panel height, the long axis). NativeHidInput maps xs against
+// 30480 (long) and ys against 20320 (short), so the long FTS axis (y) feeds xs and the short FTS axis (x) feeds ys.
+inline uint32_t scaleLong(uint32_t ftsY) { return ftsY >= 32000 ? 30479u : ftsY * 30480u / 32000u; }
+inline uint32_t scaleShort(uint32_t ftsX) { return ftsX >= 14400 ? 20319u : ftsX * 20320u / 14400u; }
+
+void touchPublishHid(void) {
+  native_touch_seq = native_touch_seq + 1;                 // odd: a write is in progress (seqlock)
+  __asm__ volatile("dmb ish" ::: "memory");
+  unsigned n = 0;
+  for (unsigned id = 0; id < 10 && n < 12; ++id)
+    if (gContacts[id].active) {
+      native_touch_ids[n] = static_cast<int>(id);
+      native_touch_xs[n] = static_cast<int>(gContacts[id].x);
+      native_touch_ys[n] = static_cast<int>(gContacts[id].y);
+      ++n;
+    }
+  native_touch_count = n;
+  __asm__ volatile("dmb ish" ::: "memory");
+  native_touch_seq = native_touch_seq + 1;                 // even: the frame is readable
+  if (gTouchSink) gTouchSink(gTouchSinkContext);
+}
+
 void ftsSenseOn(void) {
   const uint8_t tx[3] = {0xa0, 0x00, 0x01};   // setScanMode(SCAN_MODE_ACTIVE, 0x01)
   spiTransfer(tx, nullptr, sizeof tx);
@@ -576,9 +604,9 @@ void ftsSenseOn(void) {
 
 void touchPublish(void) {
   snprintf(zeus_touch_rows[11], sizeof zeus_touch_rows[11],
-           "#touch s4 polls %u int-low %u forced %u events %u down %u move %u up %u ready %u err %u | last id %u x %u y %u | x %u..%u y %u..%u",
+           "#touch s4 polls %u int-low %u forced %u events %u down %u move %u up %u ready %u err %u hid %u | last id %u x %u y %u | x %u..%u y %u..%u",
            gTouch.polls, gTouch.intLow, gTouch.forced, gTouch.events, gTouch.downs, gTouch.moves, gTouch.ups, gTouch.readies, gTouch.errors,
-           gTouch.lastId, gTouch.lastX, gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX,
+           native_touch_hid_reports, gTouch.lastId, gTouch.lastX, gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX,
            gTouch.minY == 0xffffffffu ? 0 : gTouch.minY, gTouch.maxY);
   // The first non-zero events after sensing went on, as raw bytes (row 8, free after stage 3b's pad row was read).
   char row[200];
@@ -601,10 +629,12 @@ void touchEvent(const uint8_t e[8]) {
     if (x > gTouch.maxX) gTouch.maxX = x;
     if (y < gTouch.minY) gTouch.minY = y;
     if (y > gTouch.maxY) gTouch.maxY = y;
+    if (id < 10) { gContacts[id].active = true; gContacts[id].x = scaleLong(y); gContacts[id].y = scaleShort(x); }
   } else if (e[0] == EventLeave) {
-    if (e[1] != 0xb5) ++gTouch.ups;
+    if (e[1] != 0xb5) { ++gTouch.ups; const uint32_t id = e[1] >> 4; if (id < 10) gContacts[id].active = false; }
   } else if (e[0] == EventReady) {
-    ++gTouch.readies;   // the controller reset itself: sensing comes back off
+    ++gTouch.readies;   // the controller reset itself: sensing comes back off, the contact set is stale
+    for (unsigned i = 0; i < 10; ++i) gContacts[i].active = false;
     ftsSenseOn();
   } else if (e[0] == EventError) {
     ++gTouch.errors;
@@ -620,12 +650,15 @@ void touchLoop(void *, wait_result_t) {
     if (low) ++gTouch.intLow;
     const bool forced = !low && gTouch.polls % 10 == 0;
     if (forced) ++gTouch.forced;
+    unsigned processed = 0;
     for (unsigned i = 0; i < 32 && (low || forced); ++i) {
       uint8_t event[8];
       ftsReadEvent(event);
       if (!event[0]) break;
       touchEvent(event);
+      ++processed;
     }
+    if (processed) touchPublishHid();   // hand the current contact set to NativeHidInput, then wake it through the sink
     if ((gTouch.polls & 31) == 0 || gTouch.events) touchPublish();
     IOSleep(8);
   }
@@ -649,6 +682,10 @@ void stage4a(void) {
   thread_t thread = nullptr;
   if (kernel_thread_start(&touchLoop, nullptr, &thread) == KERN_SUCCESS) {
     thread_deallocate(thread);
+    // The one-time stage rows (s1/s2/s3a/s3c) are already in the kernel log above; free their snapshot slots so BootLog's
+    // [hid] attach row fits in each round. Kept live: s3b i2c (7), first events (8), s3d chip id (10), s4 counters (11).
+    for (unsigned i = 0; i <= 6; ++i) zeus_touch_rows[i][0] = 0;
+    zeus_touch_rows[9][0] = 0;
   } else {
     snprintf(zeus_touch_rows[11], sizeof zeus_touch_rows[11], "#touch s4 no report thread");
   }

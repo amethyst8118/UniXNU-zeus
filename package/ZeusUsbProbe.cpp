@@ -13,12 +13,28 @@
 // zeus DT: dwc3 core 0xa600000 (Apple window +0xc000), femto PHY 0x88e3000 with param-override (0xe7@0x6c, 0x0c@0x70, 0x14@0x74).
 // DWC3 (Linux core.h): GCTL 0xc110, GSNPSID 0xc120, GUID 0xc128, GUSB2PHYCFG 0xc200, GUSB3PIPECTL 0xc2c0, DCFG 0xc700,
 // DCTL 0xc704, DSTS 0xc70c.
+//   2  stage 1, then UniXNU QcomDwc3 (drivers/QcomDwc3, built with QCOM_DWC3_ZEUS): bring-up over ABL's state (SMMU stage 1 identity
+//      context for SID 0, UTMI clock, core ID), then, as aston's UsbProbe.cpp, AppleUSBXDCI and AppleUSBXHCI loaded, the native
+//      classes registered (deferred metaclass registration) and the controller published: Apple's USB device stack, lockdownd.
+//      The core interrupt (INTID 165) goes through ArmCpu's SPI attach: the first device SPI zeus takes. Live row: '#usb s2' (row 9).
+//   3  stage 2 with QcomDwc3's register sampling every 2 s (its usb=2 diagnostics).
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
+#include <IOKit/IOService.h>
+#include <libkern/c++/OSMetaClass.h>
+#include <libkern/OSKextLib.h>
 
 extern "C" vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, uint32_t flags);
+
+extern kmod_info_t g_kernel_kmod_info;
+extern "C" bool qcom_dwc3_bring_up(void);
+extern "C" void qcom_dwc3_publish(void);
+extern "C" void qcom_dwc3_diag(bool);
+extern "C" void qcom_dwc3_static_init(void) __asm__("__GLOBAL__sub_I_QcomDwc3.cpp");
+extern "C" volatile uint32_t native_usb_stats[54];
+extern "C" void qcom_dwc3_host_load(int);
 
 extern "C" {
 // '#usb' rows 4-6 of the boot log's touch rows (ZeusTouchProbe.cpp; free once the touch report thread runs, before this probe).
@@ -77,25 +93,85 @@ void stage1() {
   for (unsigned i = 4; i <= 6; ++i) IOLog("%s\n", zeus_touch_rows[i]);
 }
 
+IOSimpleLock *gGccLock;
+IOLock *gSmmuLock;
+unsigned gStage;
+
+// Stage 2: as aston's UsbProbe.cpp worker.
+void appleStack() {
+  IOSleep(3000);
+  if (!qcom_dwc3_bring_up()) return;
+  // AppleUSBXDCI has no personality of its own, so nothing has loaded it: its constructors and metaclasses, and those of
+  // IOUSBDeviceFamily below it, run on this load.
+  const OSReturn loaded = OSKextLoadKextWithIdentifier("com.apple.driver.AppleUSBXDCI");
+  native_usb_stats[21] = static_cast<uint32_t>(loaded);
+  if (loaded != kOSReturnSuccess && loaded != kOSKextReturnStartStopError) {native_usb_stats[0] = static_cast<uint32_t>(-9); return;}
+  qcom_dwc3_host_load(static_cast<int>(OSKextLoadKextWithIdentifier("com.apple.driver.usb.AppleUSBXHCI")));
+  void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+  if (!handle) {native_usb_stats[0] = static_cast<uint32_t>(-10); return;}
+  qcom_dwc3_static_init();
+  if (OSMetaClass::postModLoad(handle)) {native_usb_stats[0] = static_cast<uint32_t>(-11); return;}
+  qcom_dwc3_publish();
+  if (gStage >= 3) qcom_dwc3_diag(false);
+}
+
+void liveRow() {
+  const volatile uint32_t *s = native_usb_stats;
+  snprintf(zeus_touch_rows[9], sizeof zeus_touch_rows[9],
+           "#usb s2 st %d id %08x gdsc %08x br %x smmu %x irq %u on %u off %u reset %x dsts %08x start %x pm %x kext %x role %x vbus %x",
+           static_cast<int>(s[0]), s[1], s[5], s[8], s[7], s[11], s[12], s[13], s[14], s[15], s[19], s[20], s[21], s[44], s[35]);
+}
+
 void usbThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-usb");
   stage1();
   zeus_usb_stage = 1;
+  if (gStage >= 2) {
+    // The Apple stack on its own thread, so this one keeps the rows alive whatever it waits on.
+    thread_t worker = nullptr;
+    if (kernel_thread_start([](void *, wait_result_t) {appleStack(); thread_terminate(current_thread());}, nullptr, &worker) ==
+        KERN_SUCCESS)
+      thread_deallocate(worker);
+  }
   // The rows are a snapshot; keep them in every log round.
   char saved[3][200];
   for (unsigned i = 0; i < 3; ++i) memcpy(saved[i], zeus_touch_rows[4 + i], sizeof saved[i]);
   for (;;) {
     IOSleep(2000);
     for (unsigned i = 0; i < 3; ++i) if (!zeus_touch_rows[4 + i][0]) memcpy(zeus_touch_rows[4 + i], saved[i], sizeof saved[i]);
+    if (gStage >= 2) liveRow();
   }
 }
 }  // namespace
+
+// QcomDwc3's board imports. The GCC read-modify-write (SM8550 boards serialise it with their audio and Bluetooth probes; on zeus only
+// QcomDwc3's SM8550 path would call it, which zeus never takes) and the apps SMMU lock (AppsSmmuLock.h; NativeUfs programs its
+// streams before this probe runs). Both are defined: an undefined weak function import is a link error on arm64e.
+extern "C" bool sm8550_gcc_update32(volatile uint32_t *reg, uint32_t clear, uint32_t set) {
+  if (!gGccLock) return false;
+  const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gGccLock);
+  *reg = (*reg & ~clear) | set;
+  __asm__ volatile("dsb sy" ::: "memory");
+  IOSimpleLockUnlockEnableInterrupt(gGccLock, state);
+  return true;
+}
+extern "C" bool sm8550_apps_smmu_lock(void) {
+  if (!gSmmuLock) return false;
+  IOLockLock(gSmmuLock);
+  return true;
+}
+extern "C" void sm8550_apps_smmu_unlock(void) {
+  if (gSmmuLock) IOLockUnlock(gSmmuLock);
+}
 
 extern "C" void sheng_usb_probe(void) {
   static uint32_t ran;
   unsigned stage = 0;
   if (ran || !PE_parse_boot_argn("zeus-usb", &stage, sizeof stage) || stage == 0) return;
   ran = 1;
+  gStage = stage;
+  gGccLock = IOSimpleLockAlloc();
+  gSmmuLock = IOLockAlloc();
   thread_t thread = nullptr;
   if (kernel_thread_start(usbThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }

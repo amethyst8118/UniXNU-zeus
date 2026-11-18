@@ -782,7 +782,16 @@ void enterRole(int role) {
         QcomDwc3Nub::route(gDeviceNub);
         // A USB host on the cable: lockdownd's launch event, then the family goes on the bus when configd's description arrives.
         IOService::getResourceService()->setProperty("AppleUSBCableType", "USBHost");
-        native_usb_stats[20] = (uint32_t)gController->cable(true);
+        IOReturn powered = gController->cable(true);
+        // zeus: no UCSI answer to wait for, so the device role is entered right after publish, before the controller's power management
+        // is initialised (usb2 log 2975e358: changePowerStateTo -> IOPMNotYetInitialized, no powerOn). Retry until it is, 60 s at most;
+        // [9] counts the retries (the SM8550 rail mask, unused on zeus).
+        for (unsigned i = 0; kZeus && powered == IOPMNotYetInitialized && i < 240; ++i) {
+            IOSleep(250);
+            powered = gController->cable(true);
+            native_usb_stats[9] = i + 1;
+        }
+        native_usb_stats[20] = (uint32_t)powered;
     }
 }
 void hostStats() {

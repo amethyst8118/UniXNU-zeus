@@ -118,8 +118,8 @@ void appleStack() {
 void liveRow() {
   const volatile uint32_t *s = native_usb_stats;
   snprintf(zeus_touch_rows[9], sizeof zeus_touch_rows[9],
-           "#usb s2 st %d id %08x gdsc %08x br %x smmu %x irq %u on %u off %u reset %x dsts %08x start %x pm %x kext %x role %x vbus %x",
-           static_cast<int>(s[0]), s[1], s[5], s[8], s[7], s[11], s[12], s[13], s[14], s[15], s[19], s[20], s[21], s[44], s[35]);
+           "#usb s2 st %d id %08x br %x smmu %x irq %u on %u off %u reset %x dsts %08x start %x pm %x/%u kext %x role %x vbus %x dcfg %08x",
+           static_cast<int>(s[0]), s[1], s[8], s[7], s[11], s[12], s[13], s[14], s[15], s[19], s[20], s[9], s[21], s[44], s[35], s[16]);
 }
 
 void usbThread(void *, wait_result_t) {

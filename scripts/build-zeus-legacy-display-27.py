@@ -406,6 +406,14 @@ compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
 compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 # zeus GPU power probe (sheng GpuPowerProbe, SM8450 facts): sheng_gpu_power_probe, staged by gpu-power=<n>, default off.
 compile_cpp(ROOT / 'kits/sheng/ZeusGpuProbe.cpp', OUT / 'ZeusGpuProbe.o')
+# The GMU firmware is private (never in this repository): embedded from ZEUS_GPU_FIRMWARE or ~/zeus-firmware when present, else empty.
+gmu_firmware = Path(os.environ.get('ZEUS_GPU_FIRMWARE', Path.home() / 'zeus-firmware')) / 'gmu_gen70000.bin'
+gmu_bytes = gmu_firmware.read_bytes() if gmu_firmware.is_file() else b''
+gmu_source = OUT / 'ZeusGpuFirmware.c'
+gmu_source.write_text('#include <stddef.h>\n#include <stdint.h>\nconst uint8_t zeus_gmu_firmware[] = {' +
+                      (','.join(map(str, gmu_bytes)) or '0') + '};\nconst size_t zeus_gmu_firmware_size = ' + str(len(gmu_bytes)) + ';\n')
+compile_c(gmu_source, OUT / 'ZeusGpuFirmware.o')
+print(f'zeus GMU firmware: {len(gmu_bytes)} bytes')
 # zeus USB bring-up (docs/USB-PLAN.md): sheng_usb_probe, staged by zeus-usb=<n>.
 compile_cpp(ROOT / 'kits/sheng/ZeusUsbProbe.cpp', OUT / 'ZeusUsbProbe.o')
 # zeus USB Ethernet debug channel (ZeusUsbEth.c, from ios-redfin sweet_usb.c): a DWC3-gadget CDC-ECM ifnet + UDP live log,
@@ -688,7 +696,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o',
-     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'ZeusGpuProbe.o', OUT / 'ZeusUsbProbe.o', OUT / 'ZeusUsbEth.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o', *usb_objects])
+     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'ZeusGpuProbe.o', OUT / 'ZeusGpuFirmware.o', OUT / 'ZeusUsbProbe.o', OUT / 'ZeusUsbEth.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o', *usb_objects])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]

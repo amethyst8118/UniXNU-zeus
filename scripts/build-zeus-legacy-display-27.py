@@ -399,6 +399,9 @@ compile_cpp(keystore_source, OUT / 'KeyStoreProbe.o')
 # zeus touch bring-up (docs/TOUCH-PLAN.md): native_touch_probe, staged by sheng-touch=<n>.
 touch_source = ROOT / 'kits/sheng/ZeusTouchProbe.cpp'
 compile_cpp(touch_source, OUT / 'ZeusTouchProbe.o')
+# zeus power/volume buttons: sheng_buttons_probe (sheng-buttons=1) polls the PMK8350 PON and PM8350 GPIO 6 over SPMI and owns
+# native_buttons_set_sink, NativeHidInput's report-2 sink.
+compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
@@ -426,7 +429,6 @@ void sheng_usb_probe(void) {}
 void sheng_adsp_probe(void) {}
 void sheng_battery_probe(void) {}
 void sheng_audio_probe(void) {}
-void sheng_buttons_probe(void) {}
 void sheng_backlight_probe(void) {}
 void sheng_dpu_probe(void) {}
 void aston_boot_screen_probe(void) {}
@@ -527,7 +529,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o',
-     hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
+     OUT / 'ZeusButtonProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]

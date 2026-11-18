@@ -39,11 +39,10 @@ volatile uint32_t zeus_touch_stage = 0;
 volatile uint32_t native_touch_seq = 0, native_touch_count = 0, native_touch_hid_reports = 0;
 volatile int native_touch_xs[12] = {0}, native_touch_ys[12] = {0}, native_touch_ids[12] = {0};
 // NativeHidInput registers a sink here (an arm64e static link needs these defined, not just weak-imported); the FTS report loop
-// calls it after each contact update (4c). The buttons sink is unused on zeus but must resolve too.
+// calls it after each contact update (4c). The buttons sink lives in ZeusButtonProbe.cpp.
 static void (*gTouchSink)(void *) = nullptr;
 static void *gTouchSinkContext = nullptr;
 void native_touch_set_sink(void (*fn)(void *), void *context) { gTouchSink = fn; gTouchSinkContext = context; }
-void native_buttons_set_sink(void (*)(void *, uint32_t), void *) {}
 }
 
 namespace {

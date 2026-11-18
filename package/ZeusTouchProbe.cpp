@@ -14,8 +14,9 @@
 //   3  stage 2, then piece 3a: RPMh requests for the touch vdd (ldoc2, 1800 mV, high-power mode) and for bobc1 at 3600 mV, the
 //      input of pm8008j_l3 (3304 mV plus its 224 mV dropout). Piece 3b: GPIO 7 high (the PM8008's enable line), SE5 as a GENI
 //      I2C master (FIFO, 100 kHz), then PM8008 registers read only: REVID at 0xc, MISC_CHIP_ENABLE (0x950), L3's STATUS1, EN_CTL
-//      and VSET at 0xd. Piece 3c: pm8008j_l3 to 3304 mV and on (EN_CTL bit 7), wait for VREG_READY. The controller is not
-//      touched yet.
+//      and VSET at 0xd. Piece 3c: pm8008j_l3 to 3304 mV and on (EN_CTL bit 7), wait for VREG_READY. Piece 3d: SPI mode 0
+//      bit-banged on GPIO 16-19, reset (GPIO 20) low 10 ms then high, wait for 'controller ready' (event 0x03; else four-wire SPI
+//      and retry, up to 3 times), then the chip ID (0x20000000, 36 40 expected) and firmware bytes (0x20000004).
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
@@ -26,7 +27,7 @@ extern "C" void ml_io_unmap(vm_offset_t addr, vm_size_t sz);
 
 extern "C" {
 // Rows for the boot log ('#touch' lines, BootLog.c), filled once by the stage that ran.
-char zeus_touch_rows[10][200];
+char zeus_touch_rows[12][200];
 volatile uint32_t zeus_touch_stage = 0;
 }
 
@@ -442,6 +443,132 @@ void stage3c(void) {
   IOLog("%s\n", zeus_touch_rows[9]);
 }
 
+// ---- stage 3d: bit-banged SPI to the FTS ---------------------------------------------------------------------------------------
+// SE4's FIFO interface is disabled (stage 2), so SPI mode 0 is driven by hand: MISO 16, MOSI 17, CLK 18, CS 19 (the engine's
+// lines 0-3), 1 us per half clock. Pins stay mapped.
+enum : unsigned {PinMiso = 16, PinMosi = 17, PinClk = 18, PinCs = 19, PinReset = 20, PinInt = 21};
+volatile uint32_t *gPin[22];
+
+volatile uint32_t *pinRegs(unsigned n) {
+  if (!gPin[n]) gPin[n] = map(TlmmBase + TlmmStride * n, 0x1000);
+  return gPin[n];
+}
+bool pinsReady(void) {
+  for (unsigned n = PinMiso; n <= PinInt; ++n) if (!pinRegs(n)) return false;
+  return true;
+}
+void pinOut(unsigned n, bool high, unsigned pull, unsigned ma) {
+  volatile uint32_t *p = pinRegs(n);
+  p[1] = high ? 2 : 0;
+  p[0] = pinConfig(p[0], 0, pull, ma, true);
+}
+void pinIn(unsigned n, unsigned pull, unsigned ma) {
+  volatile uint32_t *p = pinRegs(n);
+  p[0] = pinConfig(p[0], 0, pull, ma, false);
+}
+void pinSet(unsigned n, bool high) {pinRegs(n)[1] = high ? 2 : 0;}
+bool pinGet(unsigned n) {return pinRegs(n)[1] & 1;}
+
+// One transfer with CS low throughout: length bytes out (zeros without tx), as many in.
+void spiTransfer(const uint8_t *tx, uint8_t *rx, uint32_t length) {
+  pinSet(PinCs, false);
+  IODelay(1);
+  for (uint32_t i = 0; i < length; ++i) {
+    const uint8_t out = tx ? tx[i] : 0;
+    uint8_t in = 0;
+    for (int bit = 7; bit >= 0; --bit) {
+      pinSet(PinMosi, out >> bit & 1);
+      IODelay(1);
+      pinSet(PinClk, true);
+      IODelay(1);
+      in = static_cast<uint8_t>(in << 1 | (pinGet(PinMiso) ? 1 : 0));
+      pinSet(PinClk, false);
+    }
+    if (rx) rx[i] = in;
+  }
+  IODelay(1);
+  pinSet(PinCs, true);
+  IODelay(10);
+}
+
+// FTS framing (ST FTS v5.2.1 ftsIO.c / ftsHardware.h, SPI4 mode; as hakios-unicorn stfts.c).
+enum : uint8_t {FtsRegRead = 0xfb, FtsRegWrite = 0xfa, FtsReadOne = 0x87, EventReady = 0x03, EventError = 0xf3};
+
+// Register read: op, 32-bit address, one dummy byte, then the data.
+void ftsRegRead(uint32_t address, uint8_t *data, uint32_t length) {
+  uint8_t tx[32] = {FtsRegRead, static_cast<uint8_t>(address >> 24), static_cast<uint8_t>(address >> 16), static_cast<uint8_t>(address >> 8),
+                    static_cast<uint8_t>(address)};
+  uint8_t rx[32] = {0};
+  if (length > 26) length = 26;
+  spiTransfer(tx, rx, 6 + length);
+  memcpy(data, rx + 6, length);
+}
+
+void ftsRegWrite(uint32_t address, uint8_t value) {
+  const uint8_t tx[6] = {FtsRegWrite, static_cast<uint8_t>(address >> 24), static_cast<uint8_t>(address >> 16), static_cast<uint8_t>(address >> 8),
+                         static_cast<uint8_t>(address), value};
+  spiTransfer(tx, nullptr, sizeof tx);
+}
+
+// The oldest 8-byte event in the controller's FIFO (all zeros when none): op, two dummy bytes' worth of lead, then the event.
+void ftsReadEvent(uint8_t event[8]) {
+  uint8_t tx[10] = {FtsReadOne};
+  uint8_t rx[10] = {0};
+  spiTransfer(tx, rx, sizeof rx);
+  memcpy(event, rx + 2, 8);
+}
+
+// fts_spi4_mode_set() of the vendor driver: four-wire SPI on the controller's own pins.
+void ftsSpi4Mode(void) {
+  ftsRegWrite(0x20000032, 0x10);   // GPIO direction
+  ftsRegWrite(0x20000034, 0x02);   // GPIO pull-up
+  ftsRegWrite(0x2000003e, 0x07);   // GPIO config 3
+  ftsRegWrite(0x2000003d, 0x30);   // GPIO config 0
+  ftsRegWrite(0x2000002d, 0x02);   // ICR: four-wire SPI
+}
+
+// Reset by the pin, then wait up to 1 s for 'controller ready'. Keeps the first other events it saw.
+bool ftsReset(uint8_t seen[4], unsigned *nSeen) {
+  pinSet(PinReset, false);
+  IOSleep(10);
+  pinSet(PinReset, true);
+  uint8_t event[8];
+  for (unsigned waited = 0; waited < 1000; waited += 2) {
+    ftsReadEvent(event);
+    if (event[0] == EventReady) return true;
+    if (event[0] && *nSeen < 4) seen[(*nSeen)++] = event[0];
+    IOSleep(2);
+  }
+  return false;
+}
+
+void stage3d(void) {
+  if (!pinsReady()) {snprintf(zeus_touch_rows[10], sizeof zeus_touch_rows[10], "#touch s3d pins not mapped"); return;}
+  pinOut(PinReset, false, 3, 8);   // held in reset while the SPI lines settle (mi_ts_active: 8 mA, pull-up)
+  pinIn(PinInt, 3, 8);
+  pinOut(PinCs, true, 0, 8);
+  pinOut(PinClk, false, 0, 8);
+  pinOut(PinMosi, false, 0, 8);
+  pinIn(PinMiso, 0, 2);
+  IOSleep(10);
+  uint8_t seen[4] = {0};
+  unsigned nSeen = 0, attempts = 0;
+  bool ready = false;
+  while (!ready && attempts < 3) {
+    ++attempts;
+    ready = ftsReset(seen, &nSeen);
+    if (!ready) {ftsSpi4Mode(); IOSleep(1);}
+  }
+  uint8_t id[2] = {0}, fw[4] = {0};
+  ftsRegRead(0x20000000, id, sizeof id);
+  ftsRegRead(0x20000004, fw, sizeof fw);
+  snprintf(zeus_touch_rows[10], sizeof zeus_touch_rows[10],
+           "#touch s3d fts %s after %u reset(s) | other events %02x %02x %02x %02x | chip id %02x %02x (%s) | fw %02x %02x %02x %02x | int %u",
+           ready ? "ready" : "NOT ready", attempts, seen[0], seen[1], seen[2], seen[3], id[0], id[1],
+           id[0] == 0x36 && id[1] == 0x40 ? "FTM5 as expected" : "not 36 40", fw[0], fw[1], fw[2], fw[3], pinGet(PinInt) ? 1 : 0);
+  IOLog("%s\n", zeus_touch_rows[10]);
+}
+
 void stage3b(void) {
   gpioOutputSimple(7, true);                                  // pm8008j_active: the PM8008's enable line, output high
   IOSleep(10);
@@ -480,4 +607,5 @@ extern "C" void native_touch_probe(void) {
   if (stage >= 3) stage3a();
   if (stage >= 3) stage3b();
   if (stage >= 3 && gI2c) stage3c();
+  if (stage >= 3 && gI2c) stage3d();
 }

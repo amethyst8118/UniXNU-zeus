@@ -451,6 +451,8 @@ void sheng_dpu_probe(void) {}
 void aston_boot_screen_probe(void) {}
 // While no GPU is published every frame is already written when its swap arrives (submitted == retired).
 IOService *native_adreno_published_service();
+// sheng's pool can reuse mapped pages when the kernel reports the pager's close. This kernel has no such report, so the pages stay reserved.
+kern_return_t iokit_physical_descriptor_close_notify(IOMemoryDescriptor *,void (*)(void *),void *) {return KERN_NOT_SUPPORTED;}
 bool native_adreno_fences_detail_driver(uint32_t *,uint32_t *,uint32_t *);
 bool native_adreno_fences_driver(uint32_t *,uint32_t *);
 bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *detail) {

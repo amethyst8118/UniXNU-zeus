@@ -19,6 +19,8 @@
 //      and retry, up to 3 times), then the chip ID (0x20000000, 36 40 expected) and firmware bytes (0x20000004).
 //   4  stage 3, then piece 4a once the controller answered: sensing on (0xa0 00 01) and a kernel thread that drains the event
 //      FIFO while the interrupt line (GPIO 21) is low, every 8 ms; contacts are counted into the '#touch s4' row only.
+//      Before sensing goes on, THP (touch host processing, raw frames for Xiaomi's HAL) is switched off as Xiaomi's
+//      fts_enable_thp_onoff(0) does: A0 00 00, C0 21 01, A0 00 01.
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
@@ -619,7 +621,19 @@ void touchLoop(void *, wait_result_t) {
   }
 }
 
+// Xiaomi's fts_enable_thp_onoff(0): sense off (A0 00 00), THP off (C0 21 01), sense on (A0 00 01). zeus's DT sets
+// fts,support-thp and fts,support-thp-fw, so the controller runs in touch-host-processing mode (raw frames to Xiaomi's HAL, the
+// interrupt line held low, the event FIFO empty) until it is switched back to coordinate events.
+void ftsThpOff(void) {
+  const uint8_t senseOff[3] = {0xa0, 0x00, 0x00}, thpOff[3] = {0xc0, 0x21, 0x01};
+  spiTransfer(senseOff, nullptr, sizeof senseOff);
+  IOSleep(10);
+  spiTransfer(thpOff, nullptr, sizeof thpOff);
+  IOSleep(10);
+}
+
 void stage4a(void) {
+  ftsThpOff();
   ftsSenseOn();
   touchPublish();
   thread_t thread = nullptr;

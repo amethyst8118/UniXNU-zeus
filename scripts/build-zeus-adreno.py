@@ -68,7 +68,9 @@ if ADRENO_SET == 'none':
     stub = OUT / 'ZeusAdrenoNone.c'
     stub.write_text('#include <stdbool.h>\n#include <stdint.h>\nvoid *native_adreno_published_service(void) {return 0;}\n'
                     'bool native_adreno_fences_driver(uint32_t *a, uint32_t *b) {return false;}\n'
-                    'bool native_adreno_fences_detail_driver(uint32_t *a, uint32_t *b, uint32_t *c) {return false;}\n')
+                    'bool native_adreno_fences_detail_driver(uint32_t *a, uint32_t *b, uint32_t *c) {return false;}\n'
+                    'int native_gpu_trace_enabled(void) {return 0;}\n'
+                    'void native_gpu_trace_record(uint32_t e, uint32_t p, const uint64_t *v, uint32_t c) {}\n')
     obj = compile_one(stub)
     archive.unlink(missing_ok=True)
     subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)

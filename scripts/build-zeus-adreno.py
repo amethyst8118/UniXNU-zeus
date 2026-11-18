@@ -56,21 +56,26 @@ def compile_one(source):
     return obj
 
 
-# Diagnostic: ZEUS_ADRENO_SET=none links only the three symbols the display stubs need, to separate the driver's code from the build change.
+# Diagnostic: ZEUS_ADRENO_SET=none links only the symbols the display stubs need; =pad adds inert code and data of the driver's size,
+# to separate the driver's content from the kernel layout change.
 ADRENO_SET = os.environ.get('ZEUS_ADRENO_SET', 'all')
 archive = OUT / 'libAdreno740.a'
 if '--finish' in sys.argv:
-    if ADRENO_SET == 'none':
+    if ADRENO_SET in ('none', 'pad'):
         subprocess.run(['xcrun', 'ar', 'd', archive, 'NativeAdrenoAccelerator.late.o', 'original-bindings.o', 'original-addresses.o'], check=True)
         print('zeus Adreno740 diagnostic: accelerator objects removed')
     raise SystemExit(0)
-if ADRENO_SET == 'none':
+if ADRENO_SET in ('none', 'pad'):
     stub = OUT / 'ZeusAdrenoNone.c'
     stub.write_text('#include <stdbool.h>\n#include <stdint.h>\nvoid *native_adreno_published_service(void) {return 0;}\n'
                     'bool native_adreno_fences_driver(uint32_t *a, uint32_t *b) {return false;}\n'
                     'bool native_adreno_fences_detail_driver(uint32_t *a, uint32_t *b, uint32_t *c) {return false;}\n'
                     'int native_gpu_trace_enabled(void) {return 0;}\n'
-                    'void native_gpu_trace_record(uint32_t e, uint32_t p, const uint64_t *v, uint32_t c) {}\n')
+                    'void native_gpu_trace_record(uint32_t e, uint32_t p, const uint64_t *v, uint32_t c) {}\n' +
+                    ('__asm__(".text\\n.p2align 2\\n.globl _zeus_adreno_pad_text\\n_zeus_adreno_pad_text:\\n.fill 47800,4,0xd503201f\\n");\n'
+                     '__attribute__((used)) char zeus_adreno_pad_common[21504];\n'
+                     '__attribute__((used)) static char zeus_adreno_pad_bss[16828];\n'
+                     '__attribute__((used)) char zeus_adreno_pad_data[296] = {1};\n' if ADRENO_SET == 'pad' else ''))
     obj = compile_one(stub)
     archive.unlink(missing_ok=True)
     subprocess.run(['xcrun', 'ar', 'rcs', archive, obj], check=True)

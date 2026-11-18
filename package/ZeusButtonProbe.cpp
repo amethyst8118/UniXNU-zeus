@@ -178,7 +178,11 @@ void buttonsThread(void *, wait_result_t) {
     for (;;) {publishRow(); IOSleep(1000);}       // keep the failure visible in every round
   }
   native_buttons_stats[0] = 3;
-  uint32_t last = 0;
+  // iOS acted on power presses of 870-1016 ms but not on quick ones of 63-84 ms that reached it (btn2 log), so the reported power
+  // state is held for at least sheng-buttons-power-ms (default 250) after a press; the timing rows keep the raw edges.
+  uint32_t powerMinMs = 250;
+  PE_parse_boot_argn("sheng-buttons-power-ms", &powerMinMs, sizeof powerMinMs);
+  uint32_t last = 0, sent = 0;
   for (uint32_t polls = 1;; ++polls) {
     native_buttons_stats[1] = static_cast<int32_t>(polls);
     const uint32_t mask = pressed();
@@ -186,9 +190,14 @@ void buttonsThread(void *, wait_result_t) {
     if (changed) {
       timeEdges(last, mask);
       last = mask;
-      native_buttons_stats[3] = static_cast<int32_t>(mask);
+    }
+    uint32_t report = mask;
+    if (!(mask & kReportPower) && (sent & kReportPower) && nowMs() - gDownAt[0] < powerMinMs) report |= kReportPower;
+    if (report != sent) {
+      sent = report;
+      native_buttons_stats[3] = static_cast<int32_t>(report);
       void (*sink)(void *, uint32_t) = __atomic_load_n(&gSink, __ATOMIC_ACQUIRE);
-      if (sink) {sink(gSinkContext, mask); native_buttons_stats[2] = native_buttons_stats[2] + 1;}
+      if (sink) {sink(gSinkContext, report); native_buttons_stats[2] = native_buttons_stats[2] + 1;}
     }
     if (changed || polls % 50 == 0) {publishRow(); publishDiag();}
     IOSleep(20);

@@ -402,6 +402,8 @@ compile_cpp(touch_source, OUT / 'ZeusTouchProbe.o')
 # zeus power/volume buttons: sheng_buttons_probe (sheng-buttons=1) polls the PMK8350 PON and PM8350 GPIO 6 over SPMI and owns
 # native_buttons_set_sink, NativeHidInput's report-2 sink.
 compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
+# CPU frequency (sheng CpuFreqProbe, zeus clusters): sheng_cpufreq_probe, cpufreq=<mode>; needs zzye-sheng-cpu-idle.patch.
+compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
@@ -421,7 +423,6 @@ stubs.write_text('''// SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOService.h>
 #include <IOKit/IOMemoryDescriptor.h>
 extern "C" {
-void sheng_cpufreq_probe(void) {}
 void sheng_gpu_power_probe(void) {}
 void sheng_wifi_probe(void) {}
 void sheng_bluetooth_probe(void) {}
@@ -529,7 +530,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o',
-     OUT / 'ZeusButtonProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
+     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]

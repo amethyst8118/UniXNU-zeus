@@ -58,11 +58,12 @@ def compile_one(source):
 
 # Diagnostic: ZEUS_ADRENO_SET=none links only the symbols the display stubs need; =pad adds inert code and data of the driver's size,
 # to separate the driver's content from the kernel layout change; =noaccel keeps the driver core without the staged accelerator;
-# =nopublish also leaves out the publisher, submit and user-client objects.
+# =nopublish also leaves out the publisher, submit and user-client objects; =noktv keeps them but hides the publisher's
+# allocation-type records from the kernel's boot-time scan.
 ADRENO_SET = os.environ.get('ZEUS_ADRENO_SET', 'all')
 archive = OUT / 'libAdreno740.a'
 if '--finish' in sys.argv:
-    if ADRENO_SET in ('none', 'pad', 'noaccel', 'nopublish'):
+    if ADRENO_SET in ('none', 'pad', 'noaccel', 'nopublish', 'noktv'):
         subprocess.run(['xcrun', 'ar', 'd', archive, 'NativeAdrenoAccelerator.late.o', 'original-bindings.o', 'original-addresses.o'], check=True)
         print('zeus Adreno740 diagnostic: accelerator objects removed')
     raise SystemExit(0)
@@ -99,6 +100,15 @@ if ADRENO_SET != 'nopublish':
                     '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver',
                     # The driver stays inert at boot: its classes register only when the GPU start asks for them.
                     '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoPublish.cpp', publish], check=True)
+if ADRENO_SET == 'noktv':
+    data = bytearray(publish.read_bytes())
+    for old, new in ((b'__kalloc_type', b'__zeus_ktype'), (b'__kalloc_var', b'__zeus_kvar')):
+        name = old.ljust(16, b'\0') + b'__DATA_CONST'.ljust(16, b'\0')
+        at = data.find(name)
+        if at < 0 or data.find(name, at + 1) >= 0:
+            raise SystemExit(f'expected one {old!r} section in NativeAdrenoPublish.o')
+        data[at:at + 16] = new.ljust(16, b'\0')
+    publish.write_bytes(data)
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects], check=True)
 print(f'zeus Adreno740 core: {len(objects)} objects in {archive.relative_to(ROOT)}')

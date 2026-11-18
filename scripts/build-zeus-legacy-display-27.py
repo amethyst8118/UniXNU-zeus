@@ -316,7 +316,7 @@ def compile_cpp(src, dst, extra=()):
     run(cmd, cwd=r['directory'])
 
 
-def compile_c(src, dst, recipe='osfmk/DEVELOPMENT/startup.o.json'):
+def compile_c(src, dst, recipe='osfmk/DEVELOPMENT/startup.o.json', extra=()):
     """A C board core with the flags of one kernel C file (osfmk for the cores, bsd for the VFS readers)."""
     rc = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837' / recipe).read_text().strip().rstrip(','))
     cmd, args, i = [], rc['arguments'], 0
@@ -333,7 +333,7 @@ def compile_c(src, dst, recipe='osfmk/DEVELOPMENT/startup.o.json'):
         elif not value.startswith('-W'):
             cmd.append(value)
         i += 1
-    cmd += ['-Wall', '-Wextra', '-Werror', '-mgeneral-regs-only', '-I', str(ROOT / '.cache/xnu-work/osfmk'), '-I', str(ROOT / 'kits/sheng')]
+    cmd += ['-Wall', '-Wextra', '-Werror', '-mgeneral-regs-only', '-I', str(ROOT / '.cache/xnu-work/osfmk'), '-I', str(ROOT / 'kits/sheng'), *extra]
     run(cmd, cwd=rc['directory'])
 
 
@@ -410,7 +410,8 @@ compile_cpp(ROOT / 'kits/sheng/ZeusUsbProbe.cpp', OUT / 'ZeusUsbProbe.o')
 compile_c(ROOT / 'kits/sheng/ZeusLockdownPatch.c', OUT / 'ZeusLockdownPatch.o')
 # zeus USB Ethernet debug channel (ZeusUsbEth.c, from ios-redfin sweet_usb.c): a DWC3-gadget CDC-ECM ifnet + UDP live log,
 # independent of lockdownd. Compiled with the BSD net recipe (ifnet/mbuf/socket KPIs). Boot-arg zeus-usbeth=<n>.
-compile_c(ROOT / 'kits/sheng/ZeusUsbEth.c', OUT / 'ZeusUsbEth.o', recipe='bsd/DEVELOPMENT/dlil.o.json')
+compile_c(ROOT / 'kits/sheng/ZeusUsbEth.c', OUT / 'ZeusUsbEth.o', recipe='bsd/DEVELOPMENT/dlil.o.json',
+          extra=['-Wno-unknown-warning-option'])   # XNU headers use Apple-internal -W groups the stock clang lacks
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'

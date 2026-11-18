@@ -510,6 +510,7 @@ extern void sheng_buttons_probe(void);
 extern void sheng_backlight_probe(void);
 extern "C" void sheng_dpu_probe(void);
 extern "C" void aston_boot_screen_probe(void);
+extern "C" void zeus_usbeth_probe(void) __attribute__((weak_import));   // USB Ethernet debug channel (ZeusUsbEth.c, zeus-usbeth=<n>)
 void native_legacy_display_late_probe(void) {
     aston_boot_screen_probe();  // first: the boot screen takes the framebuffer until iOS draws (AstonBootScreen.cpp)
     native_keystore_probe();
@@ -519,6 +520,7 @@ void native_legacy_display_late_probe(void) {
     sheng_wifi_probe();
     if (sheng_bluetooth_probe) sheng_bluetooth_probe();
     if (sheng_usb_probe) sheng_usb_probe();
+    if (zeus_usbeth_probe) zeus_usbeth_probe();
     sheng_adsp_probe();
     sheng_battery_probe();
     sheng_audio_probe();

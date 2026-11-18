@@ -408,6 +408,9 @@ compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 compile_cpp(ROOT / 'kits/sheng/ZeusUsbProbe.cpp', OUT / 'ZeusUsbProbe.o')
 # lockdownd's CESM bring-up skipped in memory (ZeusLockdownPatch.c, osfmk flags: task internals).
 compile_c(ROOT / 'kits/sheng/ZeusLockdownPatch.c', OUT / 'ZeusLockdownPatch.o')
+# zeus USB Ethernet debug channel (ZeusUsbEth.c, from ios-redfin sweet_usb.c): a DWC3-gadget CDC-ECM ifnet + UDP live log,
+# independent of lockdownd. Compiled with the BSD net recipe (ifnet/mbuf/socket KPIs). Boot-arg zeus-usbeth=<n>.
+compile_c(ROOT / 'kits/sheng/ZeusUsbEth.c', OUT / 'ZeusUsbEth.o', recipe='bsd/DEVELOPMENT/dlil.o.json')
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
@@ -685,7 +688,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o',
-     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'ZeusUsbProbe.o', OUT / 'ZeusLockdownPatch.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o', *usb_objects])
+     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'ZeusUsbProbe.o', OUT / 'ZeusLockdownPatch.o', OUT / 'ZeusUsbEth.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o', *usb_objects])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]

@@ -14,7 +14,8 @@
 //   3  stage 2, then piece 3a: RPMh requests for the touch vdd (ldoc2, 1800 mV, high-power mode) and for bobc1 at 3600 mV, the
 //      input of pm8008j_l3 (3304 mV plus its 224 mV dropout). Piece 3b: GPIO 7 high (the PM8008's enable line), SE5 as a GENI
 //      I2C master (FIFO, 100 kHz), then PM8008 registers read only: REVID at 0xc, MISC_CHIP_ENABLE (0x950), L3's STATUS1, EN_CTL
-//      and VSET at 0xd. Nothing is written to the PM8008 and the controller is not touched yet.
+//      and VSET at 0xd. Piece 3c: pm8008j_l3 to 3304 mV and on (EN_CTL bit 7), wait for VREG_READY. The controller is not
+//      touched yet.
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
@@ -411,6 +412,36 @@ uint32_t pmRead(uint8_t address, uint16_t reg, uint8_t *value) {
   return rc ? rc : i2cCommand(address, true, nullptr, value, 1, false);
 }
 
+// A PM8008 register write: the 16-bit address, then the value, in one write command.
+uint32_t pmWrite(uint8_t address, uint16_t reg, uint8_t value) {
+  const uint8_t bytes[3] = {static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg), value};
+  return i2cCommand(address, false, bytes, nullptr, 3, false);
+}
+
+// ---- stage 3c: pm8008j_l3 (touch avdd) on ------------------------------------------------------------------------------------
+// As Linux pm8008_regulator_set_voltage/_enable: VSET in mV, a multiple of 8 (3304 = 0x0ce8), little-endian at +0x40/+0x41;
+// EN_CTL (+0x46) bit 7; then STATUS1 (+0x08) bit 7 VREG_READY, bit 5 OCP. The chip enable (0x950 bit 0) already reads 1.
+void stage3c(void) {
+  const uint16_t base = 0x4200;
+  uint32_t rc = pmWrite(0xd, base + 0x40, 0xe8);
+  if (!rc) rc = pmWrite(0xd, base + 0x41, 0x0c);
+  uint8_t en = 0, st = 0, lb = 0, ub = 0;
+  if (!rc) rc = pmRead(0xd, base + 0x46, &en);
+  if (!rc) rc = pmWrite(0xd, base + 0x46, static_cast<uint8_t>(en | 0x80));
+  unsigned waited = 0;
+  while (!rc && waited < 50) {
+    IOSleep(1);
+    ++waited;
+    rc = pmRead(0xd, base + 0x08, &st);
+    if (st & 0x80) break;
+  }
+  if (!rc) rc = pmRead(0xd, base + 0x46, &en) | pmRead(0xd, base + 0x40, &lb) | pmRead(0xd, base + 0x41, &ub);
+  snprintf(zeus_touch_rows[9], sizeof zeus_touch_rows[9],
+           "#touch s3c l3 rc %08x | status %02x (ready %u ocp %u) after %u ms | en %02x (on %u) | vset %u mV", rc, st, st >> 7 & 1, st >> 5 & 1,
+           waited, en, en >> 7 & 1, static_cast<unsigned>(lb) | static_cast<unsigned>(ub) << 8);
+  IOLog("%s\n", zeus_touch_rows[9]);
+}
+
 void stage3b(void) {
   gpioOutputSimple(7, true);                                  // pm8008j_active: the PM8008's enable line, output high
   IOSleep(10);
@@ -448,4 +479,5 @@ extern "C" void native_touch_probe(void) {
   if (stage >= 2) stage2();
   if (stage >= 3) stage3a();
   if (stage >= 3) stage3b();
+  if (stage >= 3 && gI2c) stage3c();
 }

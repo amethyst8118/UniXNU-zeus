@@ -34,6 +34,10 @@ extern "C" {
 // Rows for the boot log ('#touch' lines, BootLog.c), filled once by the stage that ran.
 char zeus_touch_rows[12][200];
 volatile uint32_t zeus_touch_stage = 0;
+// The contact set NativeHidInput (ShengHidInput) reads: seq is odd while being written, then xs/ys in the touch core's own units
+// (0..30480 long, 0..20320 short) for up to 12 fingers. 4c fills these from the FTS; zeroed here so the HID device has no fingers.
+volatile uint32_t native_touch_seq = 0, native_touch_count = 0, native_touch_hid_reports = 0;
+volatile int native_touch_xs[12] = {0}, native_touch_ys[12] = {0}, native_touch_ids[12] = {0};
 }
 
 namespace {

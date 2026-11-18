@@ -20,6 +20,7 @@
  */
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/proc.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
@@ -1048,9 +1049,24 @@ ud_if_create(void)
 		return;
 	}
 	ifnet_set_lladdr(ud.ifp, ud_phone_mac, ETHER_ADDR_LEN);
+}
 
+/*
+ * zeus: IPv4 on ue0. zeus_usbeth_probe runs from bsd_autoconf(), which comes before ether_family_init() in
+ * bsd_init(), so at that point PF_INET has no Ethernet plumber: proto_plumb() returned ENXIO, ue0 had no address,
+ * and ARP requests arrived but nothing was ever sent. This now runs from its own thread once launchd exists
+ * (bsd_utaskbootstrap() comes after ether_family_init() and net_init_run()).
+ */
+static errno_t ud_ip_err = -1;  /* -1 = not tried yet, 0 = ue0 has its address */
+
+static errno_t
+ud_if_ip(void)
+{
 	errno_t err = proto_plumb(PF_INET, ud.ifp);
 	socket_t so = NULL;
+	if (err == EEXIST) {            /* attached by an earlier try whose address step failed */
+		err = 0;
+	}
 	if (err == 0) {
 		err = sock_socket(PF_INET, SOCK_DGRAM, 0, NULL, NULL, &so);
 	}
@@ -1073,8 +1089,27 @@ ud_if_create(void)
 		err = sock_ioctl(so, SIOCAIFADDR, &ifra);
 		sock_close(so);
 	}
+	return err;
+}
+
+static void
+ud_ip_thread(void *arg __unused, wait_result_t wr __unused)
+{
+	proc_t init;
+
+	while ((init = proc_find(1)) == PROC_NULL) {
+		ud_sleep_ms(200);
+	}
+	proc_rele(init);
+	for (unsigned tries = 0; tries < 120; tries++) {
+		ud_ip_err = ud_if_ip();
+		if (ud_ip_err == 0) {
+			break;
+		}
+		ud_sleep_ms(500);
+	}
 	ifnet_set_flags(ud.ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
-	printf("SWEET USB: ue0 192.168.7.2/24 %s (err %d)\n", err ? "NOT configured" : "up", err);
+	printf("SWEET USB: ue0 192.168.7.2/24 %s (err %d)\n", ud_ip_err ? "NOT configured" : "up", ud_ip_err);
 }
 
 static void
@@ -1257,6 +1292,7 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
 			    ud.rx_frames, ud.tx_frames, (unsigned long long)ud.events, rt[2], rt[3], tt[2], tt[3],
 			    ud.tx_busy, dwc_rd(DSTS), ud_resets, ud_rearms, ud_stuck, ud_recover,
 			    ud_xact[EP_RX], ud_xact[EP_TX], ud_xact[EP_INT], ud.txq_count, ud_stale);
+			printf("SWEET USB: ue0 ip err %d, tx xfers %llu drops %llu\n", ud_ip_err, ud_tx_xfers, ud_tx_drops);
 		}
 		if (tick && ticks <= 60000 && (ticks % 5000) == 0) {
 			printf("SWEET USB: t=%us DCFG %08x DCTL %08x DSTS %08x GUSB2PHYCFG %08x GUSB3PIPECTL %08x GCTL %08x GSTS %08x EVCNT %x\n",
@@ -1927,6 +1963,9 @@ sweet_usb_gadget_start(vm_offset_t dwc)
 	}
 	printf("SWEET USB: running (DSTS 0x%08x after %d ms), DMA at 0x%llx\n", dwc_rd(DSTS), i, ud.dma_pa);
 	if (kernel_thread_start(ud_thread, NULL, &thread) == KERN_SUCCESS) {
+		thread_deallocate(thread);
+	}
+	if (ud.ifp != NULL && kernel_thread_start(ud_ip_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
 	}
 	int livelog = 1;

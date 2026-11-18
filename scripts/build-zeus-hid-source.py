@@ -6,16 +6,17 @@ transport (zeus has its own ZeusTouchProbe) and so no touch-firmware dependency.
 leaves the IOHIDDevice vtable and symbols undefined; build-zeus-legacy-display-27.py binds them to the fileset's original
 IOHIDDevice through the hid-device fixture. Produces build/zeus-hid/NativeHidInput.o.
 
-usage: build-zeus-hid-source.py --tree TREE --device DEVICE   (TREE: the prepared XNU build tree; DEVICE: the UniXNU-zeus checkout)
+The refer/IOHIDFamily and refer/IOStorageFamily checkouts are already at their pins (the tree's fetch step placed them); this
+script does not re-pin them, so it needs no OS profile. UNIXNU_XNU_ARCH / UNIXNU_IOS_VERSION come from the kernel build env.
+
+usage: build-zeus-hid-source.py --tree TREE --device DEVICE
 """
 import argparse
 import importlib.util
 import json
 import os
-import shlex
 import shutil
 import subprocess
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,10 @@ def load_helper(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def head(source):
+    return subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
 
 
 def compile_command(record, source, output, includes, extra):
@@ -64,25 +69,19 @@ def main():
     parser.add_argument('--device', required=True, type=Path)
     args = parser.parse_args()
     tree, device = args.tree.resolve(), args.device.resolve()
-    profile = tomllib.loads((ROOT / 'profiles/os' / tomllib.loads((device / 'board.toml').read_text())['board']['os_profile']
-                             / 'profile.toml').read_text())
-    pins = {entry['name']: entry for entry in profile.get('source', [])}
-    if not pins.get('IOHIDFamily', {}).get('commit'):
-        parser.error('profile is missing an explicit IOHIDFamily source pin')
-    os.environ['UNIXNU_XNU_ARCH'] = profile['os']['arch']
-    os.environ['UNIXNU_IOS_VERSION'] = profile['os']['ios_version']
+    os.environ.setdefault('UNIXNU_XNU_ARCH', 'arm64e')
+    os.environ.setdefault('UNIXNU_IOS_VERSION', '27.0')
     target = load_helper('zeus_hid_target', ROOT / 'scripts/kernel_target.py')
     headers = load_helper('zeus_hid_headers', ROOT / 'scripts/prepare-storage-headers.py')
     storage = (tree / 'refer/IOStorageFamily').resolve()
     hid = (tree / 'refer/IOHIDFamily').resolve()
-    headers.pinned_source(hid, pins['IOHIDFamily']['commit'])
-    headers.pinned_source(storage, pins['IOStorageFamily']['commit'])
     recipe = tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
     record = json.loads(recipe.read_text().strip().rstrip(','))
     target.check_object((Path(record['directory']) / 'IOPlatformExpert.cpo').read_bytes(), 'Kernel compilation recipe')
     out = tree / 'build/zeus-hid'
     out.mkdir(parents=True, exist_ok=True)
-    report = headers.prepare(storage, pins['IOStorageFamily']['commit'], out / 'headers')
+    report = headers.prepare(storage, head(storage), out / 'headers')
+    headers.pinned_source(hid, head(hid))
     include = out / 'headers/include'
     for source_dir, relative in ((hid / 'IOHIDFamily', 'IOKit/hid'), (hid / 'IOHIDSystem/IOKit/hidsystem', 'IOKit/hidsystem')):
         destination = include / relative

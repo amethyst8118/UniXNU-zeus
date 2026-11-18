@@ -62,7 +62,27 @@ def compile_one(source):
 # allocation-type records from the kernel's boot-time scan; =isolate keeps all driver data out of the kernel's shared data sections.
 ADRENO_SET = os.environ.get('ZEUS_ADRENO_SET', 'all')
 archive = OUT / 'libAdreno740.a'
+
+
+def isolate_data(obj):
+    # The driver's writable and constant data stays in its own __DATA sections. With it mixed into the kernel's shared sections, the
+    # linked kernel panicked in the zone allocator on the phone (2026-11-19); the same objects with these sections separated booted.
+    data = bytearray(obj.read_bytes())
+    for old, new in ((b'__common', b'__zadr_common'), (b'__bss', b'__zadr_bss'), (b'__data', b'__zadr_data'), (b'__const', b'__zadr_const')):
+        name = old.ljust(16, b'\0') + b'__DATA'.ljust(16, b'\0')
+        at = data.find(name)
+        while at >= 0:
+            data[at:at + 16] = new.ljust(16, b'\0')
+            at = data.find(name, at + 32)
+    obj.write_bytes(data)
+
+
 if '--finish' in sys.argv:
+    if ADRENO_SET == 'all':
+        late = ROOT / 'build/adreno740-accelerator/NativeAdrenoAccelerator.late.o'
+        isolate_data(late)
+        subprocess.run(['xcrun', 'ar', 'r', archive, late], check=True)
+        print('zeus Adreno740: accelerator data isolated')
     if ADRENO_SET in ('none', 'pad', 'noaccel', 'nopublish', 'noktv', 'isolate'):
         subprocess.run(['xcrun', 'ar', 'd', archive, 'NativeAdrenoAccelerator.late.o', 'original-bindings.o', 'original-addresses.o'], check=True)
         print('zeus Adreno740 diagnostic: accelerator objects removed')
@@ -100,16 +120,9 @@ if ADRENO_SET != 'nopublish':
                     '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver',
                     # The driver stays inert at boot: its classes register only when the GPU start asks for them.
                     '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoPublish.cpp', publish], check=True)
-if ADRENO_SET == 'isolate':
+if ADRENO_SET in ('all', 'isolate'):
     for obj in objects:
-        data = bytearray(obj.read_bytes())
-        for old, new in ((b'__common', b'__zadr_common'), (b'__bss', b'__zadr_bss'), (b'__data', b'__zadr_data'), (b'__const', b'__zadr_const')):
-            name = old.ljust(16, b'\0') + b'__DATA'.ljust(16, b'\0')
-            at = data.find(name)
-            while at >= 0:
-                data[at:at + 16] = new.ljust(16, b'\0')
-                at = data.find(name, at + 32)
-        obj.write_bytes(data)
+        isolate_data(obj)
 if ADRENO_SET == 'noktv':
     data = bytearray(publish.read_bytes())
     for old, new in ((b'__kalloc_type', b'__zeus_ktype'), (b'__kalloc_var', b'__zeus_kvar')):

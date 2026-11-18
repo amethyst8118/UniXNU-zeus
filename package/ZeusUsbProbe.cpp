@@ -161,10 +161,8 @@ int ldVisit(struct proc *p, void *) {
   const int result = zeus_lockdown_patch_task(proc_task(p), &base, &page);
   if (pid != gLd.pid) gLd.tries = 0;
   gLd.pid = pid; gLd.result = result; gLd.base = base; gLd.page = page; ++gLd.tries;
-  if (result == 0) IOLog("zeus-usb: lockdownd %d CESM bring-up skipped (header %llx, page %x)
-", pid, base, page);
-  else if (result == -3) IOLog("zeus-usb: lockdownd %d: unexpected code at the CESM site, left alone
-", pid);
+  if (result == 0) IOLog("zeus-usb: lockdownd %d CESM bring-up skipped (header %llx, page %x)\n", pid, base, page);
+  else if (result == -3) IOLog("zeus-usb: lockdownd %d: unexpected code at the CESM site, left alone\n", pid);
   return 0;
 }
 void ldThread(void *, wait_result_t) {

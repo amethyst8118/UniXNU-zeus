@@ -63,7 +63,7 @@ static void sweet_usb_gadget_start(vm_offset_t dwc);
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 
 #define GCC_PA                  0x00100000
-#define GCC_SIZE                0x00090000
+#define GCC_SIZE                0x000a0000      /* zeus: clkref at 0x9c00c (redfin mapped 0x90000) */
 #define GCC_USB30_PRIM_GDSCR    0x49004         /* SM8450 gcc-sm8450.c: usb30_prim_gdsc */
 /* DWC3 stream ID in the apps SMMU: redfin DT iommus = <&apps_smmu 0xe0 0x0> (flame/sunfish 0x140) */
 #define USB_SID                 0x0u

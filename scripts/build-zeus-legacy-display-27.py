@@ -405,7 +405,17 @@ compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
 # CPU frequency (sheng CpuFreqProbe, zeus clusters): sheng_cpufreq_probe, cpufreq=<mode>; needs zzye-sheng-cpu-idle.patch.
 compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 # zeus GPU power probe (sheng GpuPowerProbe, SM8450 facts): sheng_gpu_power_probe, staged by gpu-power=<n>, default off.
-compile_cpp(ROOT / 'kits/sheng/ZeusGpuProbe.cpp', OUT / 'ZeusGpuProbe.o')
+gpu_includes = [x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4') for x in ('-I', str(ROOT / d))]
+compile_cpp(ROOT / 'kits/sheng/ZeusGpuProbe.cpp', OUT / 'ZeusGpuProbe.o', gpu_includes)
+# The GPU objects keep their data out of the kernel's shared __DATA sections (see build-zeus-adreno.py).
+gpu_probe = bytearray((OUT / 'ZeusGpuProbe.o').read_bytes())
+for old_name, new_name in ((b'__common', b'__zadr_common'), (b'__bss', b'__zadr_bss'), (b'__data', b'__zadr_data'), (b'__const', b'__zadr_const')):
+    name = old_name.ljust(16, b'\0') + b'__DATA'.ljust(16, b'\0')
+    at = gpu_probe.find(name)
+    while at >= 0:
+        gpu_probe[at:at + 16] = new_name.ljust(16, b'\0')
+        at = gpu_probe.find(name, at + 32)
+(OUT / 'ZeusGpuProbe.o').write_bytes(gpu_probe)
 # The GPU firmware is private (never in this repository): embedded from ZEUS_GPU_FIRMWARE or ~/zeus-firmware when present, else empty.
 gpu_firmware_dir = Path(os.environ.get('ZEUS_GPU_FIRMWARE', Path.home() / 'zeus-firmware'))
 gpu_firmware_source = '#include <stddef.h>\n#include <stdint.h>\n'

@@ -35,6 +35,13 @@ extern "C" void qcom_dwc3_diag(bool);
 extern "C" void qcom_dwc3_static_init(void) __asm__("__GLOBAL__sub_I_QcomDwc3.cpp");
 extern "C" volatile uint32_t native_usb_stats[54];
 extern "C" void qcom_dwc3_host_load(int);
+extern "C" IOService *qcom_dwc3_controller(void);
+// Process list walk for the diagnostics row (bsd/kern/kern_proc.c; this archive links into the kernel).
+struct proc;
+extern "C" int proc_iterate(unsigned int flags, int (*callout)(struct proc *, void *), void *arg, int (*filter)(struct proc *, void *),
+                            void *filterarg);
+extern "C" int proc_pid(struct proc *);
+extern "C" void proc_name(int pid, char *buf, int size);
 
 extern "C" {
 // '#usb' rows 4-6 of the boot log's touch rows (ZeusTouchProbe.cpp; free once the touch report thread runs, before this probe).
@@ -122,6 +129,49 @@ void liveRow() {
            static_cast<int>(s[0]), s[1], s[8], s[7], s[11], s[12], s[13], s[14], s[15], s[19], s[20], s[9], s[21], s[44], s[35], s[16]);
 }
 
+// '#usb dg' (row 0): what configd's USBDeviceConfiguration plug-in needs. It waits for an IOUSBDeviceController a user-space match
+// finds (copyMatchingService wants kIOServiceMatchedState, which only registerService gives), then for lockdownd, which launchd
+// starts on IOResources AppleUSBCableType = USBHost; then it sets the description, and the family powers the controller.
+struct Procs {int lockdownd, configd, count;};
+int procVisit(struct proc *p, void *arg) {
+  Procs *found = static_cast<Procs *>(arg);
+  char name[32] = {0};
+  const int pid = proc_pid(p);
+  proc_name(pid, name, sizeof name);
+  ++found->count;
+  if (!strcmp(name, "lockdownd")) found->lockdownd = pid;
+  else if (!strcmp(name, "configd")) found->configd = pid;
+  return 0;   // PROC_RETURNED
+}
+void diagRow() {
+  Procs procs = {0, 0, 0};
+  proc_iterate(1 /* PROC_ALLPROCLIST */, procVisit, &procs, nullptr, nullptr);
+  IOService *c = qcom_dwc3_controller();
+  char kids[96] = "";
+  unsigned nKids = 0;
+  uint32_t state = 0;
+  if (c) {
+    state = c->getState();
+    if (OSIterator *it = c->getChildIterator(gIOServicePlane)) {
+      size_t at = 0;
+      while (OSObject *o = it->getNextObject()) {
+        ++nKids;
+        if (at < sizeof kids - 24) at += snprintf(kids + at, sizeof kids - at, " %.20s", o->getMetaClass()->getClassName());
+      }
+      it->release();
+    }
+  }
+  bool matchable = false;
+  if (OSDictionary *m = IOService::serviceMatching("IOUSBDeviceController")) {
+    if (IOService *s = IOService::copyMatchingService(m)) {matchable = true; s->release();}
+    m->release();
+  }
+  const bool cable = IOService::getResourceService()->getProperty("AppleUSBCableType") != nullptr;
+  snprintf(zeus_touch_rows[0], sizeof zeus_touch_rows[0],
+           "#usb dg ctl %d state %x match %d cable %d | lockdownd %d configd %d procs %d | kids %u:%s", c != nullptr, state, matchable, cable,
+           procs.lockdownd, procs.configd, procs.count, nKids, kids);
+}
+
 void usbThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-usb");
   stage1();
@@ -139,7 +189,7 @@ void usbThread(void *, wait_result_t) {
   for (;;) {
     IOSleep(2000);
     for (unsigned i = 0; i < 3; ++i) if (!zeus_touch_rows[4 + i][0]) memcpy(zeus_touch_rows[4 + i], saved[i], sizeof saved[i]);
-    if (gStage >= 2) liveRow();
+    if (gStage >= 2) {liveRow(); diagRow();}
   }
 }
 }  // namespace

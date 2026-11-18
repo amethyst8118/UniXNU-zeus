@@ -887,6 +887,8 @@ extern "C" bool qcom_ucsi_connection(uint32_t *generation, uint32_t *status) {
 }
 // The hardware, before the classes exist: a failure leaves the system running with USB off.
 extern "C" bool qcom_dwc3_bring_up(void) {return bringUp();}
+// zeus diagnostics (ZeusUsbProbe.cpp #usb dg row): the device-mode controller object, once published.
+extern "C" IOService *qcom_dwc3_controller(void) {return gController;}
 // After the module's metaclasses are registered: publish the provider and start the controller.
 // For bring-up (usb=2): what the core and the SMMU see while the system stack runs, sampled about every 5 ms for the link state.
 // cycle (usb=3) also takes the controller off the bus and back once, the path a cable removal runs, for an unattended host check.

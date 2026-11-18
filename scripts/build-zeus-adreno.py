@@ -59,11 +59,11 @@ def compile_one(source):
 # Diagnostic: ZEUS_ADRENO_SET=none links only the symbols the display stubs need; =pad adds inert code and data of the driver's size,
 # to separate the driver's content from the kernel layout change; =noaccel keeps the driver core without the staged accelerator;
 # =nopublish also leaves out the publisher, submit and user-client objects; =noktv keeps them but hides the publisher's
-# allocation-type records from the kernel's boot-time scan.
+# allocation-type records from the kernel's boot-time scan; =isolate keeps all driver data out of the kernel's shared data sections.
 ADRENO_SET = os.environ.get('ZEUS_ADRENO_SET', 'all')
 archive = OUT / 'libAdreno740.a'
 if '--finish' in sys.argv:
-    if ADRENO_SET in ('none', 'pad', 'noaccel', 'nopublish', 'noktv'):
+    if ADRENO_SET in ('none', 'pad', 'noaccel', 'nopublish', 'noktv', 'isolate'):
         subprocess.run(['xcrun', 'ar', 'd', archive, 'NativeAdrenoAccelerator.late.o', 'original-bindings.o', 'original-addresses.o'], check=True)
         print('zeus Adreno740 diagnostic: accelerator objects removed')
     raise SystemExit(0)
@@ -100,6 +100,16 @@ if ADRENO_SET != 'nopublish':
                     '--redefine-sym', '_native_adreno_fences_detail=_native_adreno_fences_detail_driver',
                     # The driver stays inert at boot: its classes register only when the GPU start asks for them.
                     '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoPublish.cpp', publish], check=True)
+if ADRENO_SET == 'isolate':
+    for obj in objects:
+        data = bytearray(obj.read_bytes())
+        for old, new in ((b'__common', b'__zadr_common'), (b'__bss', b'__zadr_bss'), (b'__data', b'__zadr_data'), (b'__const', b'__zadr_const')):
+            name = old.ljust(16, b'\0') + b'__DATA'.ljust(16, b'\0')
+            at = data.find(name)
+            while at >= 0:
+                data[at:at + 16] = new.ljust(16, b'\0')
+                at = data.find(name, at + 32)
+        obj.write_bytes(data)
 if ADRENO_SET == 'noktv':
     data = bytearray(publish.read_bytes())
     for old, new in ((b'__kalloc_type', b'__zeus_ktype'), (b'__kalloc_var', b'__zeus_kvar')):

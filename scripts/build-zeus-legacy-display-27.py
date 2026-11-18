@@ -406,14 +406,16 @@ compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
 compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 # zeus GPU power probe (sheng GpuPowerProbe, SM8450 facts): sheng_gpu_power_probe, staged by gpu-power=<n>, default off.
 compile_cpp(ROOT / 'kits/sheng/ZeusGpuProbe.cpp', OUT / 'ZeusGpuProbe.o')
-# The GMU firmware is private (never in this repository): embedded from ZEUS_GPU_FIRMWARE or ~/zeus-firmware when present, else empty.
-gmu_firmware = Path(os.environ.get('ZEUS_GPU_FIRMWARE', Path.home() / 'zeus-firmware')) / 'gmu_gen70000.bin'
-gmu_bytes = gmu_firmware.read_bytes() if gmu_firmware.is_file() else b''
+# The GPU firmware is private (never in this repository): embedded from ZEUS_GPU_FIRMWARE or ~/zeus-firmware when present, else empty.
+gpu_firmware_dir = Path(os.environ.get('ZEUS_GPU_FIRMWARE', Path.home() / 'zeus-firmware'))
+gpu_firmware_source = '#include <stddef.h>\n#include <stdint.h>\n'
+for symbol, name in (('zeus_gmu_firmware', 'gmu_gen70000.bin'), ('zeus_gpu_sqe', 'a730_sqe.fw'), ('zeus_gpu_zap_mdt', 'a730_zap.mdt'), ('zeus_gpu_zap_b01', 'a730_zap.b01')):
+    data = (gpu_firmware_dir / name).read_bytes() if (gpu_firmware_dir / name).is_file() else b''
+    gpu_firmware_source += f'const uint8_t {symbol}[] = {{' + (','.join(map(str, data)) or '0') + f'}};\nconst size_t {symbol}_size = {len(data)};\n'
+    print(f'zeus GPU firmware {name}: {len(data)} bytes')
 gmu_source = OUT / 'ZeusGpuFirmware.c'
-gmu_source.write_text('#include <stddef.h>\n#include <stdint.h>\nconst uint8_t zeus_gmu_firmware[] = {' +
-                      (','.join(map(str, gmu_bytes)) or '0') + '};\nconst size_t zeus_gmu_firmware_size = ' + str(len(gmu_bytes)) + ';\n')
+gmu_source.write_text(gpu_firmware_source)
 compile_c(gmu_source, OUT / 'ZeusGpuFirmware.o')
-print(f'zeus GMU firmware: {len(gmu_bytes)} bytes')
 # zeus USB bring-up (docs/USB-PLAN.md): sheng_usb_probe, staged by zeus-usb=<n>.
 compile_cpp(ROOT / 'kits/sheng/ZeusUsbProbe.cpp', OUT / 'ZeusUsbProbe.o')
 # zeus USB Ethernet debug channel (ZeusUsbEth.c, from ios-redfin sweet_usb.c): a DWC3-gadget CDC-ECM ifnet + UDP live log,

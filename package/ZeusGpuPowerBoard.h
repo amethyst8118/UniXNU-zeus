@@ -143,7 +143,11 @@ static inline void gpb_run(const struct gpb_io *io, unsigned mode, unsigned have
             unsigned waited = 0;
             if (io->delay_us) io->delay_us(io->cookie, 1);
             for (;;) {                                                      // gdsc_poll_status(GDSC_ON) on gds_hw_ctrl bit 31
+                uint32_t direct = 0;
                 if (gpb_rd(io, r, GPB_WIN_GPUCC, GPB_CC_CX_GDS_HW_CTRL, &st)) {bad = 1; break;}
+                // zeus: negroni (SM8450) saw PWR_ON in GDSCR, diting (Cape) in HW_CTRL; either one means the domain is up.
+                if (gpb_rd(io, r, GPB_WIN_GPUCC, GPB_CC_CX_GDSCR, &direct)) {bad = 1; break;}
+                if (gpb_gdsc_on(direct)) st |= GPB_GDSC_PWR_ON;
                 if (gpb_gdsc_on(st) || waited >= GPB_GDSC_POLL_US) break;
                 if (io->delay_us) io->delay_us(io->cookie, 10);
                 waited += 10;
@@ -184,7 +188,7 @@ static inline void gpb_run(const struct gpb_io *io, unsigned mode, unsigned have
     // hlos = GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK). The bus/iface clocks are not required to be on for a global-space read; this is a
     // conservative guess made visible in the rows, not a validated rule. Global space 0 only.
     if (!(have & (1u << GPB_WIN_SMMU))) r->smmu = GPB_NOMAP;
-    else if (r->cc != GPB_DONE || !gpb_gdsc_on(r->cx_gdscr) || !gpb_clock_on(r->cc_smmu)) r->smmu = GPB_SKIPPED_PREREQ;
+    else if (r->cc != GPB_DONE || !(gpb_gdsc_on(r->cx_gdscr) || r->powered_cx) || !gpb_clock_on(r->cc_smmu)) r->smmu = GPB_SKIPPED_PREREQ;
     else {
         gpb_rd(io, r, GPB_WIN_SMMU, GPB_SMMU_SCR0, &r->scr0);
         gpb_rd(io, r, GPB_WIN_SMMU, GPB_SMMU_ID0, &r->id0);
@@ -209,7 +213,7 @@ static inline void gpb_run(const struct gpb_io *io, unsigned mode, unsigned have
     }
     // Stage 4: the GPU register window needs the GX domain on (RBBM_STATUS is in the GX-gated space on A7XX) and CX on.
     if (!(have & (1u << GPB_WIN_GPU))) r->gpu = GPB_NOMAP;
-    else if (r->cc != GPB_DONE || !gpb_gdsc_on(r->cx_gdscr) || !gpb_gdsc_on(r->gx_gdscr)) r->gpu = GPB_SKIPPED_PREREQ;
+    else if (r->cc != GPB_DONE || !(gpb_gdsc_on(r->cx_gdscr) || r->powered_cx) || !gpb_gdsc_on(r->gx_gdscr)) r->gpu = GPB_SKIPPED_PREREQ;
     else {
         gpb_rd(io, r, GPB_WIN_GPU, GPB_RBBM_STATUS_BYTES, &r->rbbm_status);
         r->gpu = GPB_DONE;

@@ -1,0 +1,89 @@
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index 6b405a5..8a48233 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -1271,7 +1271,8 @@ tu_cs_emit_draw_state(struct tu_cs *cs, uint32_t id, struct tu_draw_state state)
+        state.writeable)
+       enable_mask |= CP_SET_DRAW_STATE__0_DIRTY;
+ 
+-   const bool disabled = !state.size || !state.iova;
++   const bool disabled = !state.size || !state.iova ||
++                         !tu_cs_iova_ok(cs, state.iova, (uint64_t)state.size * sizeof(uint32_t));
+    tu_cs_emit(cs, CP_SET_DRAW_STATE__0_COUNT(state.size) |
+                   enable_mask |
+                   CP_SET_DRAW_STATE__0_GROUP_ID(id) |
+diff --git a/src/freedreno/vulkan/tu_cs.cc b/src/freedreno/vulkan/tu_cs.cc
+index 47e1939..cd2ff0f 100644
+--- a/src/freedreno/vulkan/tu_cs.cc
++++ b/src/freedreno/vulkan/tu_cs.cc
+@@ -8,6 +8,24 @@
+ #include "tu_device.h"
+ #include "tu_rmv.h"
+ #include "tu_suballoc.h"
++#include "util/log.h"
++#include "util/u_atomic.h"
++#include <inttypes.h>
++
++/* zeus: see tu_cs_iova_ok in tu_cs.h. Calls and states refused, process-wide; the first 16 are logged. */
++uint64_t tu_cs_bad_iova;
++
++bool
++tu_cs_iova_ok(const struct tu_cs *cs, uint64_t iova, uint64_t bytes)
++{
++   const struct tu_physical_device *pd = cs->device->physical_device;
++   if (bytes && iova >= pd->va_start && bytes <= pd->va_size && iova - pd->va_start <= pd->va_size - bytes)
++      return true;
++   const uint64_t n = p_atomic_inc_return(&tu_cs_bad_iova);
++   if (n <= 16)
++      mesa_logw("tu: GPU address 0x%" PRIx64 " + 0x%" PRIx64 " outside the client range, skipped (%" PRIu64 ")", iova, bytes, n);
++   return false;
++}
+ 
+ /* There is a limit to IB size supported by HW,
+  * which appears to be 0x0fffff.
+diff --git a/src/freedreno/vulkan/tu_cs.h b/src/freedreno/vulkan/tu_cs.h
+index 6a66de1..6727400 100644
+--- a/src/freedreno/vulkan/tu_cs.h
++++ b/src/freedreno/vulkan/tu_cs.h
+@@ -377,6 +377,14 @@ tu_cs_emit_write_reg(struct tu_cs *cs, uint16_t reg, uint32_t value)
+ /**
+  * Emit a CP_INDIRECT_BUFFER command packet.
+  */
++/* zeus: whether [iova, iova + bytes) lies in the client's GPU address range ([va_start, va_start + va_size)), where every BO of this
++ * device is. A stale cs entry or draw state (a freed BO's struct is zeroed in the sparse array; a reused entries array) named
++ * addresses outside it (0, 0x6980c000, 0x2ebc8000, ...): each a GPU translation fault, a hang and a frozen UI (zeus 2026-11-19
++ * boot-fastfault: a CP_INDIRECT_BUFFER to 0x0_6980c000 in an IB1). A jump or state outside it is skipped and counted
++ * (tu_cs_bad_iova). */
++bool
++tu_cs_iova_ok(const struct tu_cs *cs, uint64_t iova, uint64_t bytes);
++
+ static inline void
+ tu_cs_emit_ib(struct tu_cs *cs, const struct tu_cs_entry *entry)
+ {
+@@ -385,8 +393,16 @@ tu_cs_emit_ib(struct tu_cs *cs, const struct tu_cs_entry *entry)
+    assert(entry->size % sizeof(uint32_t) == 0);
+    assert(entry->offset % sizeof(uint32_t) == 0);
+ 
++   const uint64_t iova = entry->bo ? entry->bo->iova + entry->offset : 0;
++   if (!tu_cs_iova_ok(cs, iova, entry->size)) {
++      /* The same length as the call, so sizes reserved for it still hold; the payload names the bad target for a dump. */
++      tu_cs_emit_pkt7(cs, CP_NOP, 3);
++      tu_cs_emit_qw(cs, iova);
++      tu_cs_emit(cs, entry->size / sizeof(uint32_t));
++      return;
++   }
+    tu_cs_emit_pkt7(cs, CP_INDIRECT_BUFFER, 3);
+-   tu_cs_emit_qw(cs, entry->bo->iova + entry->offset);
++   tu_cs_emit_qw(cs, iova);
+    tu_cs_emit(cs, entry->size / sizeof(uint32_t));
+ }
+ 
+@@ -394,7 +410,7 @@ tu_cs_emit_ib(struct tu_cs *cs, const struct tu_cs_entry *entry)
+ static inline void
+ tu_cs_emit_state_ib(struct tu_cs *cs, struct tu_draw_state state)
+ {
+-   if (state.size) {
++   if (state.size && tu_cs_iova_ok(cs, state.iova, (uint64_t)state.size * sizeof(uint32_t))) {
+       tu_cs_emit_pkt7(cs, CP_INDIRECT_BUFFER, 3);
+       tu_cs_emit_qw(cs, state.iova);
+       tu_cs_emit(cs, state.size);

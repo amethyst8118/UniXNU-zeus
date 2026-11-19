@@ -122,6 +122,7 @@ extern volatile int native_gpu_addon_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon_status __attribute__((weak_import));
 extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int zeus_launchd_cache_stage __attribute__((weak_import));
+extern volatile uint32_t zeus_exec_trace[6] __attribute__((weak_import));   // patches/xnu-12377/zeus-exec-trace.patch
 extern volatile int zeus_launchd_cache_status __attribute__((weak_import));
 extern volatile int zeus_libexec_stage __attribute__((weak_import));
 extern volatile int zeus_libexec_status __attribute__((weak_import));
@@ -1290,6 +1291,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // refused by the system) and the GPU address size (ias).
   // patches/xnu-12377/zeus-launchd-cache-overlay.patch: the launchd cache and libexec overlays (stage 5 = mounted, both entries
   // visible; status the last errno).
+  // patches/xnu-12377/zeus-exec-trace.patch: exec attempts/successes/last errno of the probe daemon and of launchd's cache loader.
+  if (&zeus_exec_trace) {
+    char row[120];
+    snprintf(row, sizeof row, "[launch trace] adrenoprobed %u/%u e%u launchd_cache_loader %u/%u e%u", zeus_exec_trace[0], zeus_exec_trace[1],
+             zeus_exec_trace[2], zeus_exec_trace[3], zeus_exec_trace[4], zeus_exec_trace[5]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&zeus_launchd_cache_stage) {
     char row[120];
     snprintf(row, sizeof row, "[launchd overlay] xpc %d/%d libexec %d/%d", zeus_launchd_cache_stage, zeus_launchd_cache_status,

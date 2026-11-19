@@ -1,0 +1,40 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -2952,6 +2952,8 @@
+  *	<ex_imgact>:???			[anything an imgact can return]
+  *	EDEADLK				Process is being terminated
+  */
++/* zeus: see bad_notrans in exec_activate_image. */
++volatile uint32_t zeus_exec_trace[6];
+ static int
+ exec_activate_image(struct image_params *imgp)
+ {
+@@ -3128,6 +3130,28 @@
+ 	proc_transend(p, 0);
+ 
+ bad_notrans:
++	/*
++	 * zeus (patches/xnu-12377/zeus-exec-trace.patch): exec attempts of the GPU probe daemon and of launchd's cache loader, for the
++	 * boot log ([launch trace], system group). [0] daemon attempts, [1] daemon successes, [2] daemon's last errno, [3] loader attempts,
++	 * [4] loader successes, [5] loader's last errno. Every execve and posix_spawn leaves exec_activate_image here.
++	 */
++	if (imgp->ip_strings) {
++		const char *zeus_path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
++		unsigned zeus_at = 0;
++		if (strncmp(zeus_path, "/usr/libexec/adrenoprobed", MAXPATHLEN) == 0) {
++			zeus_at = 1;
++		} else if (strncmp(zeus_path, "/usr/libexec/launchd_cache_loader", MAXPATHLEN) == 0) {
++			zeus_at = 4;
++		}
++		if (zeus_at) {
++			zeus_exec_trace[zeus_at - 1] = zeus_exec_trace[zeus_at - 1] + 1;
++			if (error == 0) {
++				zeus_exec_trace[zeus_at] = zeus_exec_trace[zeus_at] + 1;
++			} else {
++				zeus_exec_trace[zeus_at + 1] = (uint32_t)error;
++			}
++		}
++	}
+ 	if (imgp->ip_strings) {
+ 		execargs_free(imgp);
+ 	}

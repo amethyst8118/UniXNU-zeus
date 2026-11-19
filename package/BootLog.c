@@ -892,7 +892,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   LOG_AT("display state");
   if (log_display_on && &native_legacy_state_words) {
-    static char words[240];
+    static char words[900];
     if (native_legacy_state_words(words, sizeof words)) {at = put(out, at, cap, "[display state]", 16); at = put(out, at, cap, words, sizeof words);}
   }
   if (log_display_on && &native_legacy_prepare_report) {

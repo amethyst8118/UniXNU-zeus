@@ -379,6 +379,11 @@ extern "C" unsigned native_legacy_state_words(char *out,unsigned cap) {
     if(!object)return 0;
     unsigned at=snprintf(out,cap,"d+5808:");
     for(unsigned o=5808;o<5872 && at+16<cap;o+=4){uint32_t v;memcpy(&v,object+o,4);at+=snprintf(out+at,cap-at," %x",v);}
+    // zeus (vsync trace): the iPhone fixture's swap queue (current 6720, head 6728, tail 6736) and vsync client list (6840) sit in
+    // 6720..6976 (surface root): every nonzero quadword there, so the notification lists the render server enabled (sel 72,
+    // kern_EnableNotifications type 0 hot plug, 1 power, 3 frame info, 4 CRC, 5 vsync) show as filled slots near 6840.
+    at+=snprintf(out+at,cap-at," | n:");
+    for(unsigned o=6720;o<6976 && at+30<cap;o+=8){uint64_t v;memcpy(&v,object+o,8);if(v)at+=snprintf(out+at,cap-at," %u=%llx",o,(unsigned long long)v);}
     return at;
 }
 extern "C" unsigned native_legacy_clients_dump(char *out,unsigned cap) {

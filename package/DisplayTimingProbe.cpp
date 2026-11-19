@@ -44,6 +44,14 @@ constexpr uint32_t kPipeMore[9] = {0x08, 0x0c, 0x10, 0x18, 0x34, 0x38, 0x44, 0x4
 constexpr uint32_t kCtlMore[7] = {0x14, 0x1c, 0xfc, 0x110, 0x12c, 0x130, 0x134};
 constexpr uint32_t kTearCheck = 0x284, kAutorefresh = 0x2b4;
 unsigned gLevel;
+// dpu-autorefresh=N (zeus): the boot loader leaves interface 1's autorefresh on with a frame count of 60 (INTF_TEAR_AUTOREFRESH_CONFIG
+// 0x8000003c), so the command-mode panel gets the framebuffer once per 60 tear pulses: 1 Hz measured (2026-11-19) while the render server
+// swaps at 60 Hz. N (1..255) replaces the count, only on an interface whose autorefresh is already enabled. native_dpu_autorefresh:
+// [0] interface 1 before, [1] after, [2] interface 2 before, [3] after, [4] frames counted in one second after the change.
+unsigned gAutorefresh;
+}  // namespace
+extern "C" {volatile uint32_t native_dpu_autorefresh[5];}
+namespace {
 
 // The frame period in microseconds on an interface's line counter: the shortest time between two wraps seen within 100 ms. A wrap is a count
 // that fell below half the one before it; one missed while the thread was off the CPU only makes an interval longer, so the shortest
@@ -75,6 +83,29 @@ uint32_t framePeriodUs(volatile uint32_t *mdp, uint32_t intf) {
 
 void dpuThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(), "dpu");
+    if (gAutorefresh) {
+        IODeviceMemory *early = IODeviceMemory::withRange(kMdp, kMdpBytes);
+        IOMemoryMap *emap = early ? early->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
+        if (early) early->release();
+        if (emap) {
+            volatile uint32_t *m = reinterpret_cast<volatile uint32_t *>(emap->getVirtualAddress());
+            for (unsigned i = 0; i < 2; ++i) {
+                volatile uint32_t *reg = &m[(kIntf[i] + kAutorefresh) / 4];
+                const uint32_t before = *reg;
+                native_dpu_autorefresh[2 * i] = before;
+                if (before & 0x80000000u) {*reg = 0x80000000u | gAutorefresh; __asm__ volatile("dsb sy" ::: "memory");}
+                native_dpu_autorefresh[2 * i + 1] = *reg;
+            }
+            const uint32_t f0 = m[(kIntf[0] + kFrameCount) / 4];
+            IOSleep(1000);
+            native_dpu_autorefresh[4] = m[(kIntf[0] + kFrameCount) / 4] - f0;
+            IOLog("zeus-dpu: autorefresh i1 %#x -> %#x, i2 %#x -> %#x, interface 1 sent %u frames in 1 s
+", native_dpu_autorefresh[0],
+                  native_dpu_autorefresh[1], native_dpu_autorefresh[2], native_dpu_autorefresh[3], native_dpu_autorefresh[4]);
+            emap->release();
+        }
+        if (!gLevel) return;
+    }
     // After the render server has taken the display (the first desktop frame comes at about two minutes).
     IOSleep(150000);
     IODeviceMemory *memory = IODeviceMemory::withRange(kMdp, kMdpBytes);
@@ -156,9 +187,12 @@ void dpuThread(void *, wait_result_t) {
 }  // namespace
 
 extern "C" void sheng_dpu_probe(void) {
-    unsigned enabled = 0;
-    if (!PE_parse_boot_argn("dpu", &enabled, sizeof enabled) || !enabled || enabled > 3 || native_dpu_stats[0]) return;
+    unsigned enabled = 0, autorefresh = 0;
+    if (!PE_parse_boot_argn("dpu", &enabled, sizeof enabled) || enabled > 3) enabled = 0;
+    if (!PE_parse_boot_argn("dpu-autorefresh", &autorefresh, sizeof autorefresh) || autorefresh > 255) autorefresh = 0;
+    if ((!enabled && !autorefresh) || native_dpu_stats[0]) return;
     gLevel = enabled;
+    gAutorefresh = autorefresh;
     thread_t thread = nullptr;
     if (kernel_thread_start(dpuThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
     else native_dpu_stats[0] = uint32_t(-7);

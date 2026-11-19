@@ -225,6 +225,7 @@ extern char native_lookup_log[160][112] __attribute__((weak_import));
 extern volatile unsigned native_lookup_count __attribute__((weak_import));
 extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
+extern volatile uint32_t native_dpu_autorefresh[5] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
@@ -1905,6 +1906,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                m[31], m[32], (int)m[33], m[34], m[35], m[36]);
       at = put(out, at, cap, row, sizeof row);
     }
+  }
+  // dpu-autorefresh (DisplayTimingProbe.cpp): the interfaces' autorefresh words before -> after, and frames sent in one second after.
+  if (log_display_on && &native_dpu_autorefresh && (native_dpu_autorefresh[0] | native_dpu_autorefresh[2])) {
+    char row[120];
+    snprintf(row, sizeof row, "[dpu autorefresh] i1 %x->%x i2 %x->%x sent %u/s", native_dpu_autorefresh[0], native_dpu_autorefresh[1],
+             native_dpu_autorefresh[2], native_dpu_autorefresh[3], native_dpu_autorefresh[4]);
+    at = put(out, at, cap, row, sizeof row);
   }
   // The compositor's swapped surfaces (NativeLegacyDisplay.cpp): distinct, swaps, then per surface allocation KiB, physical segments, largest KiB.
   if (log_display_on && &native_legacy_surfaces && native_legacy_surfaces[0]) {

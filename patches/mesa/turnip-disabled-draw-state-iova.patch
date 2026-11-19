@@ -1,0 +1,23 @@
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index a729da1..6b405a5 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -1271,11 +1271,16 @@ tu_cs_emit_draw_state(struct tu_cs *cs, uint32_t id, struct tu_draw_state state)
+        state.writeable)
+       enable_mask |= CP_SET_DRAW_STATE__0_DIRTY;
+ 
++   const bool disabled = !state.size || !state.iova;
+    tu_cs_emit(cs, CP_SET_DRAW_STATE__0_COUNT(state.size) |
+                   enable_mask |
+                   CP_SET_DRAW_STATE__0_GROUP_ID(id) |
+-                  COND(!state.size || !state.iova, CP_SET_DRAW_STATE__0_DISABLE));
+-   tu_cs_emit_qw(cs, state.iova);
++                  COND(disabled, CP_SET_DRAW_STATE__0_DISABLE));
++   /* zeus (A730, darwin KMD): a disabled group still carried whatever address its state held, and the CP read it: GPU translation
++    * faults at 0x2f11c4a0+0x20 (upper word 0; every client address is above 4 GiB) and at 0, each a GPU hang, ~2 s frozen UI. The
++    * faulting CP was at a CP_SET_DRAW_STATE entry of group TU_DRAW_STATE_DYNAMIC + PATCH_CONTROL_POINTS, count 0, DISABLE. A
++    * disabled group's address is never used for state, so it names the device's global BO, which every client VM maps. */
++   tu_cs_emit_qw(cs, disabled ? cs->device->global_bo->iova : state.iova);
+ }
+ 
+ template <chip CHIP>

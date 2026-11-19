@@ -12,6 +12,7 @@ The merged cache is Apple-derived: it only ever exists in the private build dire
 usage (on the build Mac, from the UniXNU checkout): zeus-addon-launchd.py IN.bin OS_LAUNCHD.plist PLUGIN_DIR OUT.bin
 """
 import importlib.util
+import os
 import plistlib
 import shutil
 import subprocess
@@ -44,6 +45,21 @@ def main():
         }
         (work / 'daemons/org.unixnu.adrenoprobed.plist').write_bytes(plistlib.dumps(job))
         report = bbr.merge_launchd_cache(os_cache, work / 'daemons', work / 'xpc/launchd.plist')
+        # Test only: ZEUS_LAUNCHD_DROP=label[,label…] removes those OS jobs from the merged cache, to see whether launchd runs from this
+        # cache at all (a dropped daemon that still runs means launchd uses another copy).
+        drop = [label for label in os.environ.get('ZEUS_LAUNCHD_DROP', '').split(',') if label]
+        if drop:
+            cache = work / 'xpc/launchd.plist'
+            merged = plistlib.loads(cache.read_bytes())
+            jobs = merged['LaunchDaemons']
+            gone = [key for key, job in jobs.items() if job.get('Label') in drop]
+            if len(gone) != len(drop):
+                sys.exit('ZEUS_LAUNCHD_DROP: not every label is an OS job')
+            for key in gone:
+                del jobs[key]
+            cache.write_bytes(plistlib.dumps(merged, fmt=plistlib.FMT_XML, sort_keys=False))
+            subprocess.run(['plutil', '-convert', 'binary1', str(cache)], check=True)
+            print('launchd cache: dropped', gone)
         report.update(bbr.sign_launchd_cache(work / 'xpc/launchd.plist'))
         (work / 'libexec').mkdir()
         shutil.copy2(plugin / 'adrenoprobed', work / 'libexec/adrenoprobed')

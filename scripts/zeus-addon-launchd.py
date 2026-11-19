@@ -47,8 +47,11 @@ def main():
         report.update(bbr.sign_launchd_cache(work / 'xpc/launchd.plist'))
         (work / 'libexec').mkdir()
         shutil.copy2(plugin / 'adrenoprobed', work / 'libexec/adrenoprobed')
+        # The job's own plist goes to daemons/ too (shown over /System/Library/LaunchDaemons by the kernel's add-on daemon mount): the
+        # cache keys the job by that path, and launchd ran its cache loader but never started a job whose plist path does not exist
+        # (boot-trace1 2026-11-20: [launch trace] adrenoprobed 0/0, launchd_cache_loader 1/1). sheng's Wi-Fi add-on ships its plist there.
         subprocess.run([sys.executable, str(root / 'scripts/addon-add-dir.py'), str(addon), str(out),
-                        'xpc', str(work / 'xpc'), 'libexec', str(work / 'libexec')], check=True)
+                        'xpc', str(work / 'xpc'), 'libexec', str(work / 'libexec'), 'daemons', str(work / 'daemons')], check=True)
         print('launchd cache: %d OS jobs kept, added %s, cdhash %s' % (report['original_jobs'], report['added_jobs'], report['cdhash']))
 
 

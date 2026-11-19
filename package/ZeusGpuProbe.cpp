@@ -16,7 +16,7 @@
 //      CP protection, CP_ME_INIT, the zap shader through TrustZone (PAS image 13, zeus carve-out 0x8b91a000), CP_SET_SECURE_MODE 0 and a CP_MEM_WRITE
 //      into a scratch page, which the CPU then reads back. Private firmware is embedded at build time.
 //   8  as 6, then sheng's Adreno driver core on the A730: its GPU context and buffers, ring, CP init, zap, interrupt, timer and submit object,
-//      then native_adreno_publish. A one-ring start without clock gating, CP protection or preemption; the Metal accelerator stays unpublished.
+//      then native_adreno_publish. A one-ring start without clock gating, CP protection or preemption; with gpu-metal=1 it then publishes the staged accelerator for Metal discovery (publishMetal).
 // A read of an unclocked block can reset the phone, so the log says what comes next and waits before each new block: the last line
 // on the USB log (zeus_usbeth_host.py) names the block. The run starts late (gpu-power-delay, seconds) so that link is up.
 #include <IOKit/IOLib.h>
@@ -26,6 +26,8 @@
 #include <pexpert/pexpert.h>
 #include <string.h>
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOService.h>
+#include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSSharedPtr.h>
 #include <kern/clock.h>
@@ -53,7 +55,29 @@ extern const uint8_t zeus_gpu_sqe[], zeus_gpu_zap_mdt[], zeus_gpu_zap_b01[];
 extern const size_t zeus_gpu_sqe_size, zeus_gpu_zap_mdt_size, zeus_gpu_zap_b01_size;
 vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, uint32_t flags);
 void sheng_gpu_power_probe(void);
+// The staged accelerator (sheng's NativeAdrenoAccelerator.cpp, bound to IOGPUFamily's IOAcceleratorES by
+// scripts/ioaccelerator-base-abi-24A446-d94ap.json): its static initializer runs only after IOGPUFamily has loaded.
+void native_adreno_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_NativeAdrenoAccelerator.cpp") __attribute__((weak));
+IOService *native_adreno_accelerator_allocate(void) __attribute__((weak));
+unsigned native_adreno_accelerator_instance_size(void) __attribute__((weak));
+kern_return_t OSKextLoadKextWithIdentifier(const char *);
 }
+// Layouts as sheng's GpuPowerProbe.cpp reads them (drivers/Adreno740 user-client diagnostics).
+struct NativeAdrenoMetalDiagView {
+  uint32_t opens, busy, bad, closes, reports, property_reads, foreign_opens, foreign_type, name_reads, calls, last_selector, last_status, ext_entries,
+      ext_selector, ext_status, ext_in, ext_out, tunnel_calls, probes, sel_bits[8], mb_maps, mb_calls, marks_total, marks[16], chk_macf, chk_res,
+      chk_type, type_pass_lo, type_pass_hi, attach_status, inflight, inflight_since_calls, forced_unmaps;
+  char opener[3][17];
+  char reader[3][17];
+  char name_reader[17];
+  char starter[3][17];
+  char report[64];
+  char report2[64];
+};
+struct NativeAdrenoOpenRecordView {char name[20]; uint32_t type, macf, res, attach, foreign;};
+extern "C" NativeAdrenoMetalDiagView native_adreno_metal_diag __attribute__((weak));
+extern "C" NativeAdrenoOpenRecordView native_adreno_open_log[8] __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_open_log_count __attribute__((weak));
 
 namespace {
 constexpr uint64_t kCmdDb = 0x80860000;   // zeus live DT: aop_cmd_db_region@80860000, size 0x20000
@@ -739,6 +763,61 @@ void openCpAperture() {
   if (available || !answer) {printf("ZEUS GPU: CP aperture call unavailable\n"); return;}
   scmCall("CP aperture", 0x42000c1b, 4, 0xffff0000u, 0xffffffffu, 0xffffffffu, &answer, 0xffffffffu);
 }
+// gpu-metal=1 (with gpu-power=8): after DRIVER PUBLISHED, publish the staged accelerator for Metal's device discovery, as sheng's
+// publishMetal. Stages: 1 started, 2 IOAcceleratorES (136 bytes) found, 3 own class registered, 4 object made with its keys, 5 published.
+// No Metal plugin bundle is installed on zeus yet, so discovery can find the accelerator but has nothing to load.
+unsigned gMetal;
+uint32_t gMetalStage;
+int gMetalKext = -99, gMetalStatus;
+void publishMetal() {
+  gMetalStage = 1;
+  [&] {
+    if (!native_adreno_accelerator_static_init || !native_adreno_accelerator_allocate || !native_adreno_accelerator_instance_size) {
+      gMetalStatus = kIOReturnUnsupported;
+      return;
+    }
+    gMetalKext = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
+    if (gMetalKext) {gMetalStatus = gMetalKext; return;}
+    const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
+    const OSMetaClass *parent = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
+    OSSafeReleaseNULL(name);
+    if (!parent || parent->getClassSize() != 136) {gMetalStatus = kIOReturnNotFound; return;}
+    gMetalStage = 2;
+    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+    if (!handle) {gMetalStatus = kIOReturnNoResources; return;}
+    native_adreno_accelerator_static_init();
+    gMetalStatus = OSMetaClass::postModLoad(handle);
+    if (gMetalStatus) return;
+    if (native_adreno_accelerator_instance_size() != 136) {gMetalStatus = kIOReturnInvalid; return;}
+    gMetalStage = 3;
+    IOService *accelerator = native_adreno_accelerator_allocate();
+    if (!accelerator) {gMetalStatus = kIOReturnNoMemory; return;}
+    if (!accelerator->init()) {accelerator->release(); gMetalStatus = kIOReturnError; return;}
+    // The keys the original _MTLRegisterDevices reads. The plugin name is ours; no Apple device identity is claimed.
+    accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
+    accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
+    // patches/xnu/zzw-native-adreno-sandbox-grant.patch: the original sandbox profiles name no class of this driver.
+    accelerator->setProperty("NativeSandboxGrantProcess", "*");
+    gMetalStage = 4;
+    if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); gMetalStatus = kIOReturnNotAttached; return;}
+    accelerator->registerService();
+    gMetalStage = 5;
+  }();
+  printf("ZEUS GPU: metal stage %u status %x kext %x%s\n", gMetalStage, unsigned(gMetalStatus), unsigned(gMetalKext),
+         gMetalStage == 5 ? " (ACCELERATOR PUBLISHED)" : "");
+}
+// Who reaches the accelerator: opens granted/busy/closed, MetalPluginName reads and their reader, the latest opener, the newest open record.
+void metalReport(unsigned round) {
+  if (!&native_adreno_metal_diag) {printf("ZEUS GPU: metal report: no diagnostics linked\n"); return;}
+  const NativeAdrenoMetalDiagView &d = native_adreno_metal_diag;
+  printf("ZEUS GPU: metal %u opens %u busy %u bad %u closes %u name reads %u by %.16s opener %.16s calls %u sel %u status %x\n", round, d.opens,
+         d.busy, d.bad, d.closes, d.name_reads, d.name_reader, d.opener[0], d.calls, d.last_selector, unsigned(d.last_status));
+  if (&native_adreno_open_log_count && native_adreno_open_log_count) {
+    const NativeAdrenoOpenRecordView &r = native_adreno_open_log[(native_adreno_open_log_count - 1) & 7];
+    printf("ZEUS GPU: metal %u open log %u: %.19s type %x macf %x res %x attach %x foreign %u\n", round, native_adreno_open_log_count, r.name,
+           r.type, r.macf, r.res, r.attach, r.foreign);
+  }
+}
 void driverStart() {
   if (!zeus_gpu_sqe_size || !zeus_gpu_zap_mdt_size || !zeus_gpu_zap_b01_size) {printf("ZEUS GPU: stage 8 stop: GPU firmware not in this build\n"); return;}
   const uintptr_t smmu = gBase[W_SMMU], cb = smmu + 32 * 0x1000;
@@ -821,6 +900,7 @@ void driverStart() {
   printf("ZEUS GPU: driver submit %x timer %x classes %x publish %x ias %u service %p\n", submit, timer, classes, published, ias, native_adreno_published_service());
   if (!published && native_adreno_published_service()) printf("ZEUS GPU: DRIVER PUBLISHED\n");
   coreReport("after publish");
+  if (!published && gMetal) publishMetal();
 }
 
 void run(unsigned mode) {
@@ -865,6 +945,11 @@ void probeThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-gpu-probe");
   IOSleep(gDelayS * 1000);
   run(gMode);
+  // After a published accelerator: report Metal discovery every 30 s for 10 minutes.
+  for (unsigned round = 1; gMetalStage == 5 && round <= 20; ++round) {
+    IOSleep(30000);
+    metalReport(round);
+  }
   thread_terminate(current_thread());
 }
 }
@@ -873,6 +958,7 @@ extern "C" void sheng_gpu_power_probe(void) {
   PE_parse_boot_argn("gpu-power", &gMode, sizeof(gMode));
   PE_parse_boot_argn("gpu-power-delay", &gDelayS, sizeof(gDelayS));
   PE_parse_boot_argn("gpu-power-pause", &gPauseMs, sizeof(gPauseMs));
+  PE_parse_boot_argn("gpu-metal", &gMetal, sizeof(gMetal));
   if (!gMode) return;
   if (gMode > 8) gMode = 8;
   thread_t thread;

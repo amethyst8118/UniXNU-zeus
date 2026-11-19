@@ -385,9 +385,17 @@ static UfsSlotWaiter *gSlotWaitHead = nullptr, *gSlotWaitTail = nullptr;
 // Hybrid completion waits (as Linux's hybrid block polling): a wait polls for its first gSpinUs microseconds, then sleeps on the
 // completion interrupt. Short commands complete while polling; long ones leave the CPU after the budget.
 static uint32_t gSpinUs = 200;
-// Set once by the panic path (native_ufs_log_panic). The CPUs that still run may hold a slot forever, so with one slot it is tried for
-// 200 ms and then used anyway. Commands only poll (TransferPoll.h), so they also run with interrupts masked.
+// Set once by the panic path (native_ufs_log_panic), for the thread that made that call only. A panic here does not always stop the
+// other CPUs: an original kext's unmapped-call panic leaves them running for minutes. If every thread took the panic slot, their
+// commands would share one descriptor and PRDT without a lock, and a read could land in another caller's (zero-copy) pages. So only
+// the panicking thread, which runs with interrupts masked and must not wait, takes the reserved slot and polls; the CPUs that still
+// run keep the locked pool. With one slot the panicking thread tries it for 200 ms and then uses it anyway.
 static bool gHostPanic = false;
+static thread_t gHostPanicThread = nullptr;
+static bool hostPanicCaller (void)
+{
+  return __atomic_load_n (&gHostPanic, __ATOMIC_ACQUIRE) && current_thread () == gHostPanicThread;
+}
 
 static void hostSlotsInit (unsigned count, IOLock *lock)
 {
@@ -400,7 +408,7 @@ static void hostSlotsInit (unsigned count, IOLock *lock)
 static UfsSlot hostSlotTake (bool *pooled)
 {
   *pooled = false;
-  if (gHostPanic) {
+  if (hostPanicCaller ()) {
     if (gSlotCount > 1) return ufsSlot (gSlotCount - 1);
     for (unsigned tries = 0; tries < 200000; tries++) {
       if (IOLockTryLock (gSlotLock)) {
@@ -437,7 +445,7 @@ static UfsSlot hostSlotTake (bool *pooled)
 static void hostSlotGive (const UfsSlot &slot, bool pooled)
 {
   if (!pooled) return;
-  if (gHostPanic) { gSlotFree |= 1U << slot.index; return; }   // no sleeper wakes in a panic
+  if (hostPanicCaller ()) { gSlotFree |= 1U << slot.index; return; }   // no sleeper wakes in a panic
   IOLockLock (gSlotLock);
   --gSlotsBusy;
   if (UfsSlotWaiter *waiter = gSlotWaitHead) {

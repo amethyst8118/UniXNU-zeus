@@ -1027,7 +1027,7 @@ extern "C" volatile uint64_t native_ufs_irq_sleeps = 0, native_ufs_irqs = 0;
 extern "C" volatile uint32_t native_ufs_irq_mode = 0;
 
 static uint32_t hostCompletionCount (unsigned slot) { return __atomic_load_n (&gSlotGen[slot], __ATOMIC_ACQUIRE); }
-static bool hostInterruptMode (void) { return gIrqMode && !gHostPanic; }
+static bool hostInterruptMode (void) { return gIrqMode && !hostPanicCaller (); }
 static uint64_t gSpinTicks = 0;
 static uint32_t gSpinTicksUs = ~0U;
 static uint32_t gWaitMode = kUfsWaitSpin;   // boot-arg native-ufs-wait (CompletionWait.h)
@@ -1829,7 +1829,7 @@ extern "C" int native_ufs_export_write (uint64_t rel, uint32_t blocks, const voi
 // UIC command at a time. Returns 1 with *value, 0 on refusal, timeout or a nonzero result code (*value then holds 0xffff0000 | code).
 extern "C" int native_ufs_dme_get (uint32_t attribute, uint32_t selector, uint32_t *value)
 {
-  if (!gHost.ready || !value || gHostPanic) return 0;
+  if (!gHost.ready || !value || hostPanicCaller ()) return 0;
   IOLockLock (gHost.lock);
   int ok = 0;
   *value = 0xffffffffU;
@@ -1861,10 +1861,14 @@ extern "C" int native_ufs_log_sync (void)
   return gLogRegionBlocks && hostSyncCache () == kIOReturnSuccess;
 }
 
-// From a panic, before the log writes that keep its message: later host commands no longer wait on the host lock. 1 = the log is open.
+// From a panic, before the log writes that keep its message: the calling thread's later host commands no longer wait on the host lock
+// (RootCommands.h hostPanicCaller); every other thread keeps the locked pool. The first caller owns the panic path. 1 = the log is open.
 extern "C" int native_ufs_log_panic (void)
 {
-  gHostPanic = true;
+  if (!__atomic_load_n (&gHostPanic, __ATOMIC_ACQUIRE)) {
+    gHostPanicThread = current_thread ();
+    __atomic_store_n (&gHostPanic, true, __ATOMIC_RELEASE);
+  }
   return gLogRegionBlocks != 0;
 }
 

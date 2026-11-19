@@ -12,11 +12,11 @@
       "evidence": "bti c; dsb sy; ret, next to ml_get_interrupts_enabled as in machine_routines.c: OSSynchronizeIO is __builtin_arm_dsb(DSB_SY). No symbol in the original image; IOSurface, IOGPUFamily, IOAVFamily and IOCryptoAcceleratorFamily call it. Retargeted from the iPad 24A446 fixture by exact function hash."
     },
     {
-      "original": "0xfffffff00ab4bbe8",
+      "original": "0xfffffff00b11adb0",
       "original_size": 8,
       "original_sha256": "224d4df0836ae187285a713f6eab38d506f106d5205135a58ab1548d5684fce9",
       "native_symbol": "_garbage_collect_provisioning_profiles",
-      "evidence": "8-byte function right after complete_security_boot_mode (paired) in kern_codesigning.c source order; blacktop symbolicator signatures name the same address. Source: bsd/kern/kern_codesigning.c garbage_collect_provisioning_profiles. Retargeted from the iPad 24A446 fixture by exact function hash."
+      "evidence": "8-byte function (bti c; b +4, a tail call into the function after it) right after complete_security_boot_mode (paired, 0xfffffff00b11ad4c) in kern_codesigning.c source order; AMFI's one kernel call slot to it reached the unmapped-call stub (diagnose-unmapped-call.py, STATE 2026-11-17). Source: bsd/kern/kern_codesigning.c garbage_collect_provisioning_profiles; the native body is a no-op without CODE_SIGNING_MONITOR. Corrected 2026-11-19: the exact-hash retarget from the iPad 24A446 fixture had picked 0xfffffff00ab4bbe8, another tail-call stub with the same 8 bytes and no kext caller."
     },
     {
       "original": "0xfffffff00ab86b04",

@@ -8,3 +8,4 @@ zeus-smp-kernel-clean.patch
 zeus-no-bulk-setway.patch
 zeus-migration-rerun.patch
 zzye-sheng-cpu-idle.patch
+zeus-pmap-extra-dram.patch

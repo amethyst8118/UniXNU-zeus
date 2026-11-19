@@ -19,6 +19,10 @@
 #include <string.h>
 
 extern "C" IOReturn native_adreno_pool_add(uint64_t physical, uint64_t bytes) __attribute__((weak));   // Adreno740 NativeAdrenoPool.cpp
+// patches/xnu-12377/zeus-pmap-extra-dram.patch: the run becomes DRAM for the pmap (write-combined → Normal NC, default → write-back)
+// instead of Device memory. 0 on success. A run the pmap refuses is never handed to the GPU driver (boot-pool3: Device-GRE pool BOs
+// crashed backboardd).
+extern "C" int zeus_pmap_add_dram(uint64_t base, uint64_t size) __attribute__((weak));
 // For the boot log ([gpu pool] board): [0] runs offered, [1] runs the driver took, [2] KiB the driver took, [3] the last refusal.
 extern "C" {volatile uint32_t native_gpu_pool_board[4];}
 // KiB of DarwinBoot's runs left out because they are not on the allow-list (BootLog prints it as stock-reserved).
@@ -40,6 +44,12 @@ void addRun(uint64_t base, uint64_t end)
     end &= ~4095ull;
     if (end <= base || end - base < (1ull << 20)) return;
     native_gpu_pool_board[0] = native_gpu_pool_board[0] + 1;
+    const int dram = zeus_pmap_add_dram ? zeus_pmap_add_dram(base, end - base) : -1;
+    if (dram) {
+        native_gpu_pool_board[3] = 0xd0000000u | uint32_t(dram & 0xff);
+        IOLog("zeus gpu pool: 0x%llx + 0x%llx: pmap refused (%d), not used\n", (unsigned long long)base, (unsigned long long)(end - base), dram);
+        return;
+    }
     const IOReturn status = native_adreno_pool_add(base, end - base);
     if (status == kIOReturnSuccess) {
         native_gpu_pool_board[1] = native_gpu_pool_board[1] + 1;

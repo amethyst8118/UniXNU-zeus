@@ -1,0 +1,170 @@
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 2eadcf0..0f46119 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -1967,6 +1967,80 @@ pmap_construct_io_pte(pmap_paddr_t paddr, pt_entry_t tmplate)
+ }
+ #endif /* XNU_MONITOR */
+ 
++/*
++ * zeus (patches/xnu-12377/zeus-pmap-extra-dram.patch): DRAM outside the gDramBase window that a board driver owns (the GPU memory
++ * pool: the high-bank runs DarwinBoot lists in /chosen/darwinboot-memory-outside). Those pages are not managed (pa_valid is false)
++ * and is_dram_addr() calls them "not DRAM", so every CPU mapping of them was Device memory: VM_WIMG_WCOMB/RT fell back to
++ * Device-GRE in wimg_to_pte and pmap_cache_attributes answered VM_WIMG_IO for default mappings (PAR_EL1 attribute 0x0c in
++ * boot-pool3; DC ZVA in bzero and user-space memset faulted, backboardd crashed). A range added here is DRAM for this pmap:
++ * write-combined and real-time mappings become Normal Non-cacheable, default mappings Normal write-back (the GPU is proved
++ * IO-coherent before the pool serves anything). is_dram_addr() itself is unchanged for every other user.
++ * The table only grows; entries are written before the count is published, so readers need no lock.
++ */
++#define ZEUS_EXTRA_DRAM_MAX 8
++static struct {
++	uint64_t base;
++	uint64_t size;
++} zeus_extra_dram[ZEUS_EXTRA_DRAM_MAX];
++static uint32_t zeus_extra_dram_count;
++
++static inline bool
++zeus_extra_dram_addr(uint64_t pa)
++{
++	const uint32_t count = os_atomic_load(&zeus_extra_dram_count, acquire);
++	for (uint32_t i = 0; i < count; ++i) {
++		if (pa - zeus_extra_dram[i].base < zeus_extra_dram[i].size) {
++			return true;
++		}
++	}
++	return false;
++}
++
++#define pmap_is_dram(pa) (is_dram_addr(pa) || zeus_extra_dram_addr((uint64_t)(pa)))
++
++/*
++ * Board entry point: 0 when [base, base + size) is now DRAM for this pmap, else nonzero (unaligned, empty, overlapping XNU's
++ * window or managed memory, overlapping an earlier range, or the table full). Call it before any mapping of the range exists.
++ */
++int zeus_pmap_add_dram(uint64_t base, uint64_t size);
++int
++zeus_pmap_add_dram(uint64_t base, uint64_t size)
++{
++#if XNU_MONITOR
++	(void)base; (void)size;
++	return 1;    /* the table would have to live in PPL data */
++#else
++	if (!size || (base & PAGE_MASK) || (size & PAGE_MASK) || base + size < base) {
++		return 2;
++	}
++	if (base < gDramBase + gDramSize && gDramBase < base + size) {
++		return 3;
++	}
++	for (uint64_t pa = base; pa < base + size; pa += PAGE_SIZE) {
++		if (pa_valid(pa)) {
++			return 4;
++		}
++	}
++	/* One writer: the board's GPU pool probe, once at boot. Readers only see published entries. */
++	int result = 0;
++	const uint32_t count = zeus_extra_dram_count;
++	for (uint32_t i = 0; i < count && !result; ++i) {
++		if (base < zeus_extra_dram[i].base + zeus_extra_dram[i].size && zeus_extra_dram[i].base < base + size) {
++			result = 5;
++		}
++	}
++	if (!result && count >= ZEUS_EXTRA_DRAM_MAX) {
++		result = 6;
++	}
++	if (!result) {
++		zeus_extra_dram[count].base = base;
++		zeus_extra_dram[count].size = size;
++		os_atomic_store(&zeus_extra_dram_count, count + 1, release);
++	}
++	return result;
++#endif /* XNU_MONITOR */
++}
++
+ vm_map_address_t
+ pmap_map_bd_with_options(
+ 	vm_map_address_t virt,
+@@ -1989,9 +2063,9 @@ pmap_map_bd_with_options(
+ 		panic("%s: gDramBase/gDramSize not initialized", __func__);
+ 	}
+ 
+-	const bool first_page_is_dram = is_dram_addr(start);
++	const bool first_page_is_dram = pmap_is_dram(start);
+ 	for (vm_offset_t pa = start + PAGE_SIZE; pa < end; pa += PAGE_SIZE) {
+-		if (first_page_is_dram != is_dram_addr(pa)) {
++		if (first_page_is_dram != pmap_is_dram(pa)) {
+ 			panic("%s: range crosses DRAM boundary. First inconsistent page 0x%lx %s DRAM",
+ 			    __func__, pa, first_page_is_dram ? "is not" : "is");
+ 		}
+@@ -1999,7 +2073,7 @@ pmap_map_bd_with_options(
+ 
+ 	switch (options & PMAP_MAP_BD_MASK) {
+ 	case PMAP_MAP_BD_WCOMB:
+-		if (is_dram_addr(start)) {
++		if (pmap_is_dram(start)) {
+ 			mem_attr = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITECOMB);
+ 		} else {
+ #if HAS_FEAT_XS
+@@ -6036,7 +6110,7 @@ wimg_to_pte(unsigned int wimg, pmap_paddr_t pa)
+ 		// AP, while preserving the security benefits of using device
+ 		// mapping against side-channel attacks. On pre-H14 platforms,
+ 		// the accesses will still be strongly ordered.
+-		if (is_dram_addr(pa)) {
++		if (pmap_is_dram(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED);
+ 		} else {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DISABLE);
+@@ -6051,7 +6125,7 @@ wimg_to_pte(unsigned int wimg, pmap_paddr_t pa)
+ 		break;
+ 	case VM_WIMG_RT:
+ 		/* DRAM outside the gDramBase window (more than one physical range) is still managed memory: Normal, not Device. */
+-		if (is_dram_addr(pa) || pa_valid(pa)) {
++		if (pmap_is_dram(pa) || pa_valid(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_RT);
+ 		} else {
+ #if HAS_FEAT_XS
+@@ -6066,7 +6140,7 @@ wimg_to_pte(unsigned int wimg, pmap_paddr_t pa)
+ 		pte |= ARM_PTE_NX | ARM_PTE_PNX;
+ 		break;
+ 	case VM_WIMG_POSTED:
+-		if (is_dram_addr(pa)) {
++		if (pmap_is_dram(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED);
+ 		} else {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED);
+@@ -6074,7 +6148,7 @@ wimg_to_pte(unsigned int wimg, pmap_paddr_t pa)
+ 		pte |= ARM_PTE_NX | ARM_PTE_PNX;
+ 		break;
+ 	case VM_WIMG_POSTED_REORDERED:
+-		if (is_dram_addr(pa)) {
++		if (pmap_is_dram(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED);
+ 		} else {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED_REORDERED);
+@@ -6084,7 +6158,7 @@ wimg_to_pte(unsigned int wimg, pmap_paddr_t pa)
+ 	case VM_WIMG_POSTED_COMBINED_REORDERED:
+ 		pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED);
+ #if HAS_FEAT_XS
+-		if (!is_dram_addr(pa)) {
++		if (!pmap_is_dram(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED_XS);
+ 		}
+ #endif /* HAS_FEAT_XS */
+@@ -6092,7 +6166,7 @@ wimg_to_pte(unsigned int wimg, pmap_paddr_t pa)
+ 		break;
+ 	case VM_WIMG_WCOMB:
+ 		/* DRAM outside the gDramBase window (more than one physical range) is still managed memory: Normal, not Device. */
+-		if (is_dram_addr(pa) || pa_valid(pa)) {
++		if (pmap_is_dram(pa) || pa_valid(pa)) {
+ 			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITECOMB);
+ 		} else {
+ #if HAS_FEAT_XS
+@@ -10682,6 +10756,9 @@ pmap_cache_attributes(
+ 
+ 	if (!pa_valid(paddr)) {
+ 		pmap_io_range_t *io_rgn = pmap_find_io_attr(paddr);
++		if (io_rgn == NULL && zeus_extra_dram_addr(paddr)) {
++			return VM_WIMG_DEFAULT;    /* zeus: board-owned DRAM outside the window (zeus_pmap_add_dram) */
++		}
+ 		return (io_rgn == NULL) ? VM_WIMG_IO : io_rgn->wimg;
+ 	}
+ 

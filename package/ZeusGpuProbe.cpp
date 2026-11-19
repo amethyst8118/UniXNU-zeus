@@ -86,6 +86,8 @@ extern "C" volatile uint32_t native_adreno_table_switches[8] __attribute__((weak
 extern "C" volatile uint32_t native_adreno_cp_aperture[4] __attribute__((weak));
 // patches/armsmmu4k/0001: why the SMMU kit last returned ArmSmmu4KStateMismatch ([0] count, [1] where, then that check's values).
 extern "C" volatile uint32_t armsmmu4k_mismatch[20] __attribute__((weak));
+// patches/armsmmu4k/0002: the SMR mask the kit gives its owned streams.
+extern "C" volatile uint16_t armsmmu4k_smr_mask __attribute__((weak));
 
 namespace {
 constexpr uint64_t kCmdDb = 0x80860000;   // zeus live DT: aop_cmd_db_region@80860000, size 0x20000
@@ -840,6 +842,9 @@ void metalReport(unsigned round) {
 void driverStart() {
   if (!zeus_gpu_sqe_size || !zeus_gpu_zap_mdt_size || !zeus_gpu_zap_b01_size) {printf("ZEUS GPU: stage 8 stop: GPU firmware not in this build\n"); return;}
   const uintptr_t smmu = gBase[W_SMMU], cb = smmu + 32 * 0x1000;
+  // zeus DT: iommus = <&apps_smmu 0x0 0x400>, <&apps_smmu 0x1 0x400>. The kit writes and checks its routes with this mask.
+  if (!&armsmmu4k_smr_mask) {printf("ZEUS GPU: stage 8 stop: SMMU kit without the SMR mask patch\n"); return;}
+  armsmmu4k_smr_mask = 0x400;
   const IOReturn context = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(smmu), kSize[W_SMMU], 0, 2, 0, 0, 1, 1, nullptr, &gContextReport);
   printf("ZEUS GPU: driver context %x step %u program %u attach %u spans %u mismatch %x\n", context, gContextReport.step, gContextReport.program_status,
          gContextReport.route_status, gContextReport.spans, gContextReport.mismatch);
@@ -853,7 +858,8 @@ void driverStart() {
     printf("ZEUS GPU: driver bank 0 sctlr %08x cbar %08x fsr %08x scr0 %08x\n", rd32(cb), rd32(smmu + 0x1000 + 0x0), rd32(cb + 0x58), rd32(smmu));
     return;
   }
-  for (uint32_t sid = 0; sid < 2; ++sid) wr32(smmu + 0x800 + 4 * sid, (1u << 31) | (0x400u << 16) | sid);   // zeus DT: mask 0x400 for both GPU streams
+  // The GPU streams' SMR mask 0x400 (zeus DT) is written by the kit itself (armsmmu4k_smr_mask, set above): a rewrite here made
+  // every later route check of the kit fail, so no per-process address space could attach (boot-smmudiag, 2026-11-19).
   wr32(cb + 0x4, 0x32b);
   wr32(cb + 0x618, 0);
   wr32(cb + 0x7f0, 0);

@@ -754,6 +754,13 @@
       "evidence": "Darwin 26 KPI: monitor selector 0x1c with a 64-byte cdhash and its length at +0x40; the 20-byte variant follows it. Name chosen here; implemented in darwin26-kpi.patch (no-op without a monitor, like native). Retargeted from the iPad 24A446 fixture by shape 1.00."
     },
     {
+      "original": "0xfffffff00b11b6ec",
+      "original_size": 236,
+      "original_sha256": "64b850f3efe47508450e74ae0ff9b53830638e158e7047a486e3ffa031fe916e",
+      "native_symbol": "_csm_resolve_os_entitlements_from_proc",
+      "evidence": "bsd/kern/kern_codesigning.c csm_resolve_os_entitlements_from_proc, monitor build: csm_enabled() flag test returning 46 (KERN_NOT_SUPPORTED), proc_require (zone id 0x1a, zone_id_require panic), proc_task via the proc+0x768 task when bit 1 of +0x448 is set (else 56 KERN_NOT_FOUND), get_task_map_reference, the PAC-signed vm_map pmap at +0x58 (discriminator 0x250c), the monitor's resolve_kernel_entitlements, vm_map_deallocate. Lies after unrestrict_local_signing_cdhash_ext (paired, 0xfffffff00b11b604) in source order. The native body (no CODE_SIGNING_MONITOR) returns 46, the value the Apple body returns with the monitor off, so AMFI already handles it. AMFI's one kernel call slot to it reached the unmapped-call stub (kernel.map.json stubbed list, 2026-11-19)."
+    },
+    {
       "original": "0xfffffff00b13ce5c",
       "original_size": 152,
       "original_sha256": "776fb9b5c408759c402dd1590c3459016a43c08d6da45bb2a1c915f529bca8cd",
@@ -1280,6 +1287,12 @@
       "native_symbol": "_gIOAllCPUInitializedKey",
       "addend": 0,
       "evidence": "Unresolved ('missing') data target of the iPhone 24A446 collection, identified on 2026-11-17 from the original kernelcache with tmp/metaname.py / slotname.py. Zero-initialised global with one store in the original kernel, right after the OSSymbol made from \"IOAllCPUInitialized\" (followed by \"IOPlatformFunctionHandlerSet\"). AppleARMPlatform and AppleARMWatchdogTimer read it. Same identity as the iPad 24A446 kit fixture entry. Source: iokit/Kernel/IOService.cpp gIOAllCPUInitializedKey."
+    },
+    {
+      "original": "0xfffffff00b739538",
+      "native_symbol": "_audio_active",
+      "addend": 0,
+      "evidence": "osfmk/kern/task.c `int audio_active` (native _audio_active). Apple kernel text reads it in PROC_CROSSED_HIGH_WATERMARK__SEND_EXC_RESOURCE_AND_SUSPEND (ldst 0xfffffff00ac0da3c), the same use as native task.c (disable_exc_resource_during_audio && audio_active && task_jetsam_realtime_audio); the neighbouring task.c globals sit at 0xfffffff00b739500-0xfffffff00b739570. The Sandbox kext's sysctl_oid at 0xfffffff00b982168 (parent security.mac.sandbox, name \"audio_active\", descr \"Audio active\", CTLTYPE_INT read-write, fmt \"I\") has oid_arg1 = this address. It was unbound (kernel.json missing: com.apple.security.sandbox 0xfffffff00b739538), so the pointer kept the Apple address, which in the fileset is native __DATA+0x89538 = zone_array[392]+0x38, the bank_task zone. Writing the sysctl about 2 minutes into boot corrupted that zone: 2026-11-19 panics \"not in the expected zone bank_task[392]\" and a zcram_and_lock store fault with free_end 0x1642c85, both from posix_spawn -> get_bank_task_context -> zalloc_item."
     }
   ],
   "sites": [

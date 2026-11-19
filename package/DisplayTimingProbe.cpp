@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Display controller state (boot argument dpu=1..3), from sheng's package/DisplayTimingProbe.cpp (refs/UniXNU_UniXNU-sheng 762e796),
-// unchanged but for this comment. A read-only look at what the boot loader left running (dpu=3 also re-latches the VIG pipes on CTL 0).
+// unchanged but for this comment and zeus's pipe list (8 pipes). A read-only look at what the boot loader left running (dpu=3 also re-latches the VIG pipes on CTL 0).
 // zeus facts (device/dt/live-merged.dts, qcom,sde-kms at 0xae00000, qcom,sde-off 0x1000): the MDP block is at 0xae01000 as on sheng; the
 // DSI interfaces sit at mdp_phys + 0x36000 / 0x37000 (sde-intf-off, types dp/dsi/dsi/dp) = MDP + 0x35000 / 0x36000, CTL 0..5 at
 // mdp_phys + 0x16000 + 0x1000 * n = MDP + 0x15000 + ..., so sheng's offsets name the same blocks. The panel (l2_38_0c_0a) is DSI command
@@ -34,7 +34,10 @@ constexpr uint64_t kMdp = 0xae01000, kMdpBytes = 0x8f000;
 constexpr uint32_t kIntf[2] = {0x35000, 0x36000};
 constexpr uint32_t kTimingEnable = 0x6c, kConfig = 0x04, kCountEnable = 0xa8, kFrameCount = 0xac, kLineCount = 0xb0,
                    kVsyncPeriod = 0x0c, kStatus = 0x26c, kHsyncControl = 0x08;
-constexpr uint32_t kPipes[10] = {0x4000, 0x6000, 0x8000, 0xa000, 0x24000, 0x26000, 0x28000, 0x2a000, 0x2c000, 0x2e000};
+// zeus (SM8450, DPU 8.1) has 4 VIG and 4 DMA pipes (live DT qcom,sde-sspp-off 0x5000..0xb000, 0x25000..0x2b000 from mdp_phys);
+// sheng's DMA 4 and 5 (0x2c000, 0x2e000) do not exist here and reading them stalled the phone (2026-11-19), so slots 8 and 9 stay 0.
+constexpr uint32_t kPipes[10] = {0x4000, 0x6000, 0x8000, 0xa000, 0x24000, 0x26000, 0x28000, 0x2a000, 0, 0};
+constexpr unsigned kPipeCount = 8;
 constexpr uint32_t kSrcSize = 0x00, kSrc0 = 0x14, kStride0 = 0x24, kFormat = 0x30;
 constexpr uint32_t kCtl = 0x15000, kCtlStride = 0x1000, kCtlLayer0 = 0x00, kCtlFlush = 0x18, kCtlIntfActive = 0xf4;
 constexpr uint32_t kPipeMore[9] = {0x08, 0x0c, 0x10, 0x18, 0x34, 0x38, 0x44, 0x48, 0x70};
@@ -105,7 +108,7 @@ void dpuThread(void *, wait_result_t) {
               "timing %u counters %u\n", frames, us, counted / 1000, counted % 1000, period, timed / 1000, timed % 1000, native_dpu_more[37],
               native_dpu_stats[8], native_dpu_stats[2], native_dpu_stats[4]);
     }
-    for (unsigned p = 0; p < 10; ++p) {
+    for (unsigned p = 0; p < kPipeCount; ++p) {
         native_dpu_pipes[4 * p] = rd(kPipes[p] + kSrcSize); native_dpu_pipes[4 * p + 1] = rd(kPipes[p] + kSrc0);
         native_dpu_pipes[4 * p + 2] = rd(kPipes[p] + kStride0); native_dpu_pipes[4 * p + 3] = rd(kPipes[p] + kFormat);
     }

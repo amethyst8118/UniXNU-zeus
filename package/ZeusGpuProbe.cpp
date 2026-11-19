@@ -47,6 +47,7 @@ IOReturn native_adreno_publish(NativeAdrenoVm *, NativeAdrenoSubmit *, NativeAdr
 IOService *native_adreno_published_service();
 void native_adreno_gpu_interrupt(uint32_t status);
 void native_adreno_publish_static_init(void) __asm__("__GLOBAL__sub_I_NativeAdrenoPublish.cpp");
+void native_adreno_set_restart(NativeAdrenoRestart restart, void *cookie) __attribute__((weak));
 IOReturn armcpu_spi_attach(uint32_t intid, bool edge, void (*handler)(void *), void *context, uint32_t *readback, uint64_t *router) __attribute__((weak));
 extern kmod_info_t g_kernel_kmod_info;
 #include "ZeusGpuPowerBoard.h"
@@ -782,6 +783,54 @@ bool ringFence(const char *what, const uint32_t *words, size_t count) {
   printf("ZEUS GPU: ring %s submit %x wait %x fence %u seen %u rptr %u\n", what, sent, waited, fence, seen, gpuRd(CP_RB_RPTR));
   return !sent && !waited;
 }
+// The GPU restart after a hang, ported from sheng's gpuRestart (GpuPowerProbe.cpp, BSD-2-Clause-Patent). NativeAdrenoSubmit::recover
+// calls it under the publish lock after it has ended any SMMU context fault: a6xx_recover's reset for a GPU whose GMU it does not
+// power-cycle (GBIF drained including its GX side, RBBM_SW_RESET_CMD held for at least 100 us, then released), then hw_init on the same
+// ring: registers, interrupt mask, SQE base, ring restart, SQE start, CP init waited idle, and CP_SET_SECURE_MODE 0 again once the zap
+// shader has run (it stays loaded in TrustZone). The GMU keeps running and keeps the OOB GPU_SET vote. Without this hook a GPU fault
+// froze the GPU for the rest of the boot (boot-bgra: hangs 137, restarts 0). [0] restarts, [1] the step a failed one stopped at,
+// [2] its status, [3] RBBM_STATUS after the reset.
+constexpr uint32_t kRbbmSwResetCmd = 0x43;
+bool gZapRunning;
+extern "C" {uint32_t native_gpu_restart[4];}
+IOReturn gpuRestart(void *, NativeAdrenoRing *ring, uint32_t completed) {
+  uint32_t *r = native_gpu_restart;
+  r[0] = r[0] + 1;
+  auto fail = [&](uint32_t step, IOReturn status) {r[1] = step; r[2] = uint32_t(status); return status ? status : kIOReturnIOError;};
+  if (!ring) return fail(1, kIOReturnBadArgument);
+  if (gpb_gdsc_on(reg(GPB_WIN_GPUCC, GPB_CC_GX_GDSCR))) gpuWr(CP_SQE_CNTL, 3);
+  IOReturn status = ring->busHalt(true, 1000000);
+  if (status) return fail(2, status);
+  gpuWr(kRbbmSwResetCmd, 1); (void)gpuRd(kRbbmSwResetCmd); IODelay(1);
+  IODelay(100);
+  gpuWr(kRbbmSwResetCmd, 0); (void)gpuRd(kRbbmSwResetCmd); IODelay(1);
+  r[3] = gpuRd(RBBM_STATUS);
+  coreHwInit();
+  gpuWr(kRbbmIntMask, kA730IntMask);
+  gpuWr64(CP_SQE_INSTR_BASE, gBuffers[0].iova);
+  status = ring->restart(completed);
+  if (status) return fail(3, status);
+  gpuWr64(kCpBvRptrAddr, gBuffers[2].iova + 8);
+  gpuWr(CP_SQE_CNTL, 1);
+  // The power-up list in buffer 3 stays as driverStart packed it.
+  const NativeAdrenoCpInitConfig config = {gBuffers[0].iova, gBuffers[3].iova, 1};
+  const NativeAdrenoRingClock clock = {nullptr, ringNow, nullptr};
+  NativeAdrenoCpInit init;
+  uint32_t fence = 0;
+  status = init.run(&kRingIo, ring, &config, &fence, false);
+  if (status) return fail(4, status);
+  status = ring->idle(&clock, 1000000);
+  if (status) return fail(5, status);
+  if (gZapRunning) {
+    uint32_t words[2] = {};
+    if (AdrenoPM4Type7(0x66, 1, &words[0]) != AdrenoPM4Success) return fail(6, kIOReturnInternalError);
+    status = ring->submitUnfenced(words, 2);
+    if (!status) status = ring->idle(&clock, 1000000);
+    if (status) return fail(6, status);
+  }
+  r[1] = 0; r[2] = 0;
+  return kIOReturnSuccess;
+}
 // IO coherence, ported from sheng's coherenceProbe (GpuPowerProbe.cpp). Linux maps cached GPU BOs with IOMMU_CACHE when the Adreno
 // is ADRENO_QUIRK_HAS_CACHED_COHERENT behind a dma-coherent SMMU. Without the proof, every imported IOSurface is cleaned at each
 // submission and invalidated at completion (boot-fbgpu10: 52 GB cleaned, ~2.5 ms per submit, the UI at about 1 fps). A page of kernel
@@ -1055,6 +1104,7 @@ void driverStart() {
   if (!loadZap()) {printf("ZEUS GPU: stage 8 stop: zap shader refused\n"); return;}
   uint32_t secure[2] = {};
   if (AdrenoPM4Type7(0x66, 1, &secure[0]) != AdrenoPM4Success || !ringFence("secure exit", secure, 2)) {coreReport("secure exit failed"); return;}
+  gZapRunning = true;
   volatile uint32_t *scratch = reinterpret_cast<volatile uint32_t *>(gCpu[4]);
   scratch[0] = 0;
   ringBarrier(nullptr);
@@ -1075,6 +1125,9 @@ void driverStart() {
   const IOReturn submit = vm ? gSubmit.attach(vm, &gDriverRing) : kIOReturnNotReady;
   const IOReturn timer = gTimer.attach(&kTimerIo, NativeAdrenoTimeCp);
   if (!submit) coherenceProbe(vm);   // before any client, as sheng: decides how imported user memory is mapped
+  // The restart hook before publication, as sheng: a hang then restarts the GPU and replays the other submissions.
+  if (native_adreno_set_restart) native_adreno_set_restart(gpuRestart, nullptr);
+  printf("ZEUS GPU: restart hook %s\n", native_adreno_set_restart ? "installed" : "missing");
   void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
   if (!handle) {printf("ZEUS GPU: driver class registration not available\n"); return;}
   native_adreno_publish_static_init();

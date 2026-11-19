@@ -38,7 +38,8 @@ def main():
             'RunAtLoad': True,
             'KeepAlive': False,
             'UserName': 'root',
-            'POSIXSpawnType': 'Interactive',
+            # As sheng's working Wi-Fi job (scripts/build-wifi-userspace.py): ProcessType, not the cache-internal POSIXSpawnType.
+            'ProcessType': 'Interactive',
             'StandardErrorPath': '/dev/null',
         }
         (work / 'daemons/org.unixnu.adrenoprobed.plist').write_bytes(plistlib.dumps(job))

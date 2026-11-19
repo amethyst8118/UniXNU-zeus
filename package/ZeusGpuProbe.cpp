@@ -80,6 +80,8 @@ struct NativeAdrenoMetalDiagView {
 struct NativeAdrenoOpenRecordView {char name[20]; uint32_t type, macf, res, attach, foreign;};
 extern "C" NativeAdrenoMetalDiagView native_adreno_metal_diag __attribute__((weak));
 extern "C" NativeAdrenoOpenRecordView native_adreno_open_log[8] __attribute__((weak));
+extern "C" int proc_iterate(unsigned flags, int (*callout)(void *, void *), void *arg, int (*filter)(void *, void *), void *filterarg);
+extern "C" const char *proc_name_address(void *p);
 extern "C" volatile uint32_t native_adreno_open_log_count __attribute__((weak));
 // Why a user connection fails (NativeAdrenoPublish.cpp mount: [0] 1 createVm/open, 2 core open, 3 scope; [1] status; [3] count),
 // the per-process table switch state ([6] enable/createVm status, [7] createVm step) and the CP aperture SCM ([2] CP switch check, [3] table mode).
@@ -1045,8 +1047,24 @@ void publishMetal() {
   printf("ZEUS GPU: metal stage %u status %x kext %x%s\n", gMetalStage, unsigned(gMetalStatus), unsigned(gMetalKext),
          gMetalStage == 5 ? " (ACCELERATOR PUBLISHED)" : "");
 }
+// Is the probe daemon (launchd job org.unixnu.adrenoprobed, the unified-log export) alive? As sheng's scanProcess (GpuPowerProbe.cpp), with
+// the counts on the caller's stack: the kernel's __DATA has no room for new statics.
+struct ProcScan {uint32_t total, daemon, launchd;};
+int scanProcess(void *proc, void *arg) {
+  ProcScan *s = static_cast<ProcScan *>(arg);
+  s->total = s->total + 1;
+  const char *name = proc_name_address(proc);
+  if (name && !strncmp(name, "adrenoprobed", 12)) s->daemon = s->daemon + 1;
+  if (name && !strcmp(name, "launchd")) s->launchd = s->launchd + 1;
+  return 0;   // PROC_RETURNED: keep iterating
+}
 // Who reaches the accelerator: opens granted/busy/closed, MetalPluginName reads and their reader, the latest opener, the newest open record.
 void metalReport(unsigned round) {
+  {
+    ProcScan scan = {};
+    proc_iterate(1 /* PROC_ALLPROCLIST */, scanProcess, &scan, nullptr, nullptr);
+    printf("ZEUS GPU: metal %u processes %u adrenoprobed %u launchd %u\n", round, scan.total, scan.daemon, scan.launchd);
+  }
   if (!&native_adreno_metal_diag) {printf("ZEUS GPU: metal report: no diagnostics linked\n"); return;}
   const NativeAdrenoMetalDiagView &d = native_adreno_metal_diag;
   printf("ZEUS GPU: metal %u opens %u busy %u bad %u closes %u name reads %u by %.16s opener %.16s calls %u sel %u status %x\n", round, d.opens,

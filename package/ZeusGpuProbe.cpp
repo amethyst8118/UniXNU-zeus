@@ -55,6 +55,7 @@ extern const size_t zeus_gmu_firmware_size;
 extern const uint8_t zeus_gpu_sqe[], zeus_gpu_zap_mdt[], zeus_gpu_zap_b01[];
 extern const size_t zeus_gpu_sqe_size, zeus_gpu_zap_mdt_size, zeus_gpu_zap_b01_size;
 vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, uint32_t flags);
+void ml_io_unmap(vm_offset_t addr, vm_size_t size);
 void sheng_gpu_power_probe(void);
 // The staged accelerator (sheng's NativeAdrenoAccelerator.cpp, bound to IOGPUFamily's IOAcceleratorES by
 // scripts/ioaccelerator-base-abi-24A446-d94ap.json): its static initializer runs only after IOGPUFamily has loaded.
@@ -86,6 +87,12 @@ extern "C" volatile uint32_t native_adreno_table_switches[8] __attribute__((weak
 extern "C" volatile uint32_t native_adreno_cp_aperture[4] __attribute__((weak));
 // patches/armsmmu4k/0001: why the SMMU kit last returned ArmSmmu4KStateMismatch ([0] count, [1] where, then that check's values).
 extern "C" volatile uint32_t armsmmu4k_mismatch[20] __attribute__((weak));
+// IO coherence (from sheng GpuPowerProbe.cpp, BSD-2-Clause-Patent): the driver core maps imported user memory write-back and skips
+// the per-submission clean/invalidate only when native_adreno_io_coherent is 1, and table pages go uncleaned only with
+// native_adreno_walk_coherent[0]; both are set from the proofs in coherenceProbe() below.
+extern "C" volatile uint32_t native_adreno_io_coherent __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_walk_coherent[3] __attribute__((weak));
+extern "C" {char native_gpu_coherence_row[120]; uint32_t native_gpu_coherence[8]; char native_gpu_walk_row[80];}
 // patches/armsmmu4k/0002: the SMR mask the kit gives its owned streams.
 extern "C" volatile uint16_t armsmmu4k_smr_mask __attribute__((weak));
 
@@ -775,6 +782,150 @@ bool ringFence(const char *what, const uint32_t *words, size_t count) {
   printf("ZEUS GPU: ring %s submit %x wait %x fence %u seen %u rptr %u\n", what, sent, waited, fence, seen, gpuRd(CP_RB_RPTR));
   return !sent && !waited;
 }
+// IO coherence, ported from sheng's coherenceProbe (GpuPowerProbe.cpp). Linux maps cached GPU BOs with IOMMU_CACHE when the Adreno
+// is ADRENO_QUIRK_HAS_CACHED_COHERENT behind a dma-coherent SMMU. Without the proof, every imported IOSurface is cleaned at each
+// submission and invalidated at completion (boot-fbgpu10: 52 GB cleaned, ~2.5 ms per submit, the UI at about 1 fps). A page of kernel
+// memory is imported and mapped write-back, and both directions are proved against DRAM:
+//   read:  the CPU stores new values over lines DRAM still holds old (seen dirty through an uncached mapping), the GPU copies the
+//          page, and DRAM's copy must hold the new values, which only the CPU's caches had;
+//   write: the CPU keeps clean lines of a page it read, the GPU copies other values over it, and plain cached loads must see them.
+// Only both proofs set native_adreno_io_coherent. gpu-coherent=0 skips it (per-submission maintenance as before).
+bool dramPage(uint64_t pa, uint32_t *out) {
+  const vm_offset_t page = ml_io_map_unmappable(vm_offset_t(pa), 0x1000, 0x7 /* VM_WIMG_IO */);
+  if (!page) return false;
+  for (unsigned i = 0; i < 1024; ++i) out[i] = reinterpret_cast<const volatile uint32_t *>(page)[i];
+  ml_io_unmap(page, 0x1000);
+  return true;
+}
+bool gpuCopyPage(uint64_t src, uint64_t dst) {
+  uint32_t words[8] = {};
+  if (AdrenoPM4Type7(0x75, 5, &words[0]) != AdrenoPM4Success || AdrenoPM4Type7(0x12, 0, &words[6]) != AdrenoPM4Success) return false;
+  words[1] = 1024; words[2] = uint32_t(src); words[3] = uint32_t(src >> 32); words[4] = uint32_t(dst); words[5] = uint32_t(dst >> 32);
+  return ringFence("coherence copy", words, 7);
+}
+// Table walk coherence, after the data proofs: a page is mapped while its table pages are published by ordering alone (no clean); the
+// new leaf descriptor must still be dirty in a CPU cache, and the GPU copies through the mapping. The copy is right only if the SMMU's
+// walk read the descriptor from the CPU's cache; then later maps clean no table line. A wrong walk faults the context: the fault is
+// cleared and every table page is cleaned as before.
+bool walkProbe(NativeAdrenoVm *vm) {
+  constexpr uint64_t kBase = 0x18100000;
+  constexpr size_t kBytes = 2 * 4096;
+  uint8_t *buf = static_cast<uint8_t *>(IOMallocAligned(kBytes, 4096));
+  if (!buf) {snprintf(native_gpu_walk_row, sizeof native_gpu_walk_row, "W nomem -> off"); return false;}
+  volatile uint32_t *A = reinterpret_cast<volatile uint32_t *>(buf), *B = A + 1024;
+  for (unsigned i = 0; i < 1024; ++i) {A[i] = 0x66660000u | i; B[i] = 0;}
+  (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+  NativeAdrenoMemory mem;
+  IOReturn st = mem.importTask(kernel_task, uint64_t(uintptr_t(buf)), kBytes, 40, kBytes);
+  uint64_t phys[2] = {};
+  for (size_t j = 0; !st && j < mem.spanCount(); ++j)
+    for (size_t at = 0; at < mem.spans()[j].bytes; at += 4096) phys[(mem.spans()[j].offset + at) / 4096] = mem.spans()[j].physical + at;
+  static uint32_t words[1024];
+  unsigned dirtyAt = 0, copied = 0;
+  uint32_t fault[4] = {};
+  for (unsigned attempt = 0; attempt < 8 && !st && phys[0] && phys[1] && !dirtyAt; ++attempt) {
+    uint64_t handle = 0, pte = 0;
+    native_adreno_walk_coherent[0] = 1;   // this map's table pages: ordering only
+    st = vm->map(&mem, 0, kBase + attempt * 0x200000ull, 3, 1, 3, &handle);
+    native_adreno_walk_coherent[0] = 0;
+    if (st) break;
+    if (vm->leafPhysical(phys[0], &pte) && dramPage(pte & ~0xfffull, words)) {
+      const uint64_t inDram = uint64_t(words[(pte & 0xfff) / 4]) | uint64_t(words[(pte & 0xfff) / 4 + 1]) << 32;
+      if ((inDram & 0x0000fffffffff000ull) != phys[0]) {
+        dirtyAt = attempt + 1;
+        const uint64_t iova = kBase + attempt * 0x200000ull;
+        if (gpuCopyPage(iova, iova + 4096) && dramPage(phys[1], words))
+          for (unsigned i = 0; i < 1024; ++i) copied += words[i] == (0x66660000u | i);
+        (void)vm->faultState(fault);
+      }
+    }
+    (void)vm->unmap(handle);
+  }
+  if (fault[0]) {
+    uint32_t far[3] = {};
+    if (NativeAdrenoGpuContext *context = NativeAdrenoGpuContextObject()) (void)context->clearFault(fault[0], far);
+  }
+  const bool pass = !st && dirtyAt && copied == 1024 && !fault[0];
+  (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+  (void)mem.release();
+  IOFreeAligned(buf, kBytes);
+  snprintf(native_gpu_walk_row, sizeof native_gpu_walk_row, "W d%u c%u f%x s%x -> %s", dirtyAt, copied, fault[0], uint32_t(st), pass ? "on" : "off");
+  return pass;
+}
+unsigned gCoherenceAttempts;
+void coherenceProbe(NativeAdrenoVm *vm) {
+  uint32_t *k = native_gpu_coherence;
+  unsigned wanted = 1;
+  PE_parse_boot_argn("gpu-coherent", &wanted, sizeof wanted);
+  if (!wanted || !vm || !&native_adreno_io_coherent || !&native_adreno_walk_coherent) {
+    snprintf(native_gpu_coherence_row, sizeof native_gpu_coherence_row, "H skip (arg %u vm %d)", wanted, vm != nullptr);
+    printf("ZEUS GPU: coherence %s\n", native_gpu_coherence_row);
+    return;
+  }
+  constexpr uint64_t kIova = 0x18000000;
+  constexpr size_t kBytes = 4 * 4096;
+  uint8_t *buf = static_cast<uint8_t *>(IOMallocAligned(kBytes, 4096));
+  NativeAdrenoMemory mem;
+  uint64_t handle = 0;
+  IOReturn st = buf ? mem.importTask(kernel_task, uint64_t(uintptr_t(buf)), kBytes, 40, kBytes) : kIOReturnNoMemory;
+  k[0] = 1;
+  if (!st) {k[0] = 2; st = vm->map(&mem, 0, kIova, 3, 1, 3, &handle);}
+  uint64_t phys[4] = {};
+  for (size_t j = 0; !st && j < mem.spanCount(); ++j)
+    for (size_t at = 0; at < mem.spans()[j].bytes; at += 4096) phys[(mem.spans()[j].offset + at) / 4096] = mem.spans()[j].physical + at;
+  static uint32_t words[1024];
+  bool pass = false;
+  if (!st && phys[0] && phys[1] && phys[2] && phys[3]) {
+    k[0] = 3;
+    volatile uint32_t *S = reinterpret_cast<volatile uint32_t *>(buf), *D = S + 1024, *R = S + 2048, *T = S + 3072;
+    // read direction: S's new words must still be dirty in a CPU cache (DRAM holding the old ones, at least 48 of 64 lines) when the
+    // GPU copies S; the setup repeats until they are, up to eight times.
+    bool dirty = false;
+    for (unsigned attempt = 0; attempt < 8 && !st && !dirty; ++attempt) {
+      gCoherenceAttempts = attempt + 1;
+      for (unsigned i = 0; i < 1024; ++i) {S[i] = 0x11110000u | i; D[i] = 0; R[i] = 0x33330000u | i; T[i] = 0x44440000u | i;}
+      st = NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+      for (unsigned i = 0; i < 1024; ++i) S[i] = 0x22220000u | i;
+      __asm__ volatile("dsb sy" ::: "memory");
+      k[1] = 0;
+      if (!st && dramPage(phys[0], words)) for (unsigned i = 0; i < 1024; i += 16) k[1] += words[i] == (0x11110000u | i);
+      dirty = k[1] >= 48;
+    }
+    if (!st && dirty) {
+      k[0] = 4;
+      if (gpuCopyPage(kIova, kIova + 4096) && dramPage(phys[1], words)) {
+        k[0] = 5;
+        for (unsigned i = 0; i < 1024; ++i) {k[2] += words[i] == (0x22220000u | i); k[3] += words[i] == (0x11110000u | i);}
+      }
+    }
+    // write direction: T written back and kept (clean, resident), then read so its lines are present when the GPU writes
+    if (!st && k[0] == 5) st = NativeAdrenoMaintainOwnedPages(const_cast<uint32_t *>(T), 4096, NativeAdrenoClean);
+    uint32_t touch = 0;
+    for (unsigned i = 0; i < 1024; ++i) touch += T[i];
+    __asm__ volatile("dsb sy" ::: "memory");
+    if (!st && k[0] == 5 && gpuCopyPage(kIova + 8192, kIova + 12288)) {
+      k[0] = 6;
+      for (unsigned i = 0; i < 1024; ++i) k[4] += T[i] == (0x33330000u | i);
+      if (dramPage(phys[3], words)) for (unsigned i = 0; i < 1024; ++i) k[5] += words[i] == (0x33330000u | i);
+    }
+    (void)touch;
+    pass = k[0] == 6 && k[1] >= 48 && k[2] == 1024 && k[4] == 1024 && k[5] == 1024;
+  }
+  k[6] = uint32_t(st);
+  if (handle) (void)vm->unmap(handle);
+  // Whatever the result, no line of these pages stays in a CPU cache (a stale clean copy would outlive the free).
+  if (buf) (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+  (void)mem.release();
+  if (buf) IOFreeAligned(buf, kBytes);
+  k[7] = pass;
+  native_adreno_io_coherent = pass ? 1 : 0;
+  unsigned walk = 1;
+  PE_parse_boot_argn("gpu-walk", &walk, sizeof walk);
+  native_adreno_walk_coherent[0] = pass && walk && walkProbe(vm) ? 1 : 0;
+  snprintf(native_gpu_coherence_row, sizeof native_gpu_coherence_row, "H d%u/64 a%u r%u/%u w%u/%u s%x k%u -> %s", k[1], gCoherenceAttempts,
+           k[2], k[3], k[4], k[5], k[6], k[0], pass ? "on" : "off");
+  printf("ZEUS GPU: coherence %s; walk %s\n", native_gpu_coherence_row, pass && walk ? native_gpu_walk_row : "not tried");
+}
 void openCpAperture() {
   uint64_t answer = 0;
   const int64_t available = scmCall("CP aperture available", 0x42000601, 1, 0x02000000u | (0x0cu << 8) | 0x1bu, 0, 0, &answer);
@@ -923,6 +1074,7 @@ void driverStart() {
   NativeAdrenoVm *vm = NativeAdrenoGpuContextVm();
   const IOReturn submit = vm ? gSubmit.attach(vm, &gDriverRing) : kIOReturnNotReady;
   const IOReturn timer = gTimer.attach(&kTimerIo, NativeAdrenoTimeCp);
+  if (!submit) coherenceProbe(vm);   // before any client, as sheng: decides how imported user memory is mapped
   void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
   if (!handle) {printf("ZEUS GPU: driver class registration not available\n"); return;}
   native_adreno_publish_static_init();

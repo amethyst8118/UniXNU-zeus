@@ -262,7 +262,9 @@ bool gmuSmmu() {
   for (unsigned i = 0; (rd32(cb + 0x7f4) & 1) && i < 2000; ++i) IODelay(1);
   if (rd32(cb + 0x7f4) & 1) {printf("ZEUS GPU: SMMU TLB sync timeout\n"); return false;}
   wr32(cb, 0x127);                                                       // M, TRE, AFE, CFRE, HUPCF; fault interrupt off
-  wr32(s, (rd32(s) & ~13u) | 0x402);                                     // client translation on, unmatched streams fault
+  // Client translation on (CLIENTPD 0), EXIDENABLE 0, unmatched streams fault (USFCFG), GFRE. Keep GFIE (bit 2) as the firmware
+  // left it: the stage-8 driver's ArmSmmu4K attach requires sCR0 & 0x407 == 0x406, and ~13 here used to clear it (2026-11-19).
+  wr32(s, (rd32(s) & ~9u) | 0x402);
   wr32(s + 0xc00 + 4 * kGmuSmr, 2u << 16);                               // S2CR fault while the SMR changes
   wr32(s + 0x800 + 4 * kGmuSmr, (1u << 31) | (kGmuSidMask << 16) | kGmuSid);
   wr32(s + 0xc00 + 4 * kGmuSmr, kGmuBank);

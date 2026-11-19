@@ -121,6 +121,10 @@ extern volatile int native_gpu_addon_error __attribute__((weak_import));
 extern volatile int native_gpu_addon_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon_status __attribute__((weak_import));
 extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
+extern volatile int zeus_launchd_cache_stage __attribute__((weak_import));
+extern volatile int zeus_launchd_cache_status __attribute__((weak_import));
+extern volatile int zeus_libexec_stage __attribute__((weak_import));
+extern volatile int zeus_libexec_status __attribute__((weak_import));
 extern volatile int native_gpu_addon2_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon4_stage __attribute__((weak_import));
@@ -1284,6 +1288,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // check (IOReturn), then switches by the CP and by the CPU, address spaces made, freed, live and peak, the last
   // failure (IOReturn; bit 31: a free) and the step a failed make stopped at, then the table pages taken on demand (live, taken, freed,
   // refused by the system) and the GPU address size (ias).
+  // patches/xnu-12377/zeus-launchd-cache-overlay.patch: the launchd cache and libexec overlays (stage 5 = mounted, both entries
+  // visible; status the last errno).
+  if (&zeus_launchd_cache_stage) {
+    char row[120];
+    snprintf(row, sizeof row, "[launchd overlay] xpc %d/%d libexec %d/%d", zeus_launchd_cache_stage, zeus_launchd_cache_status,
+             zeus_libexec_stage, zeus_libexec_status);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (log_gpu_on && (&native_adreno_table_switches)) {
     char row[200];
     snprintf(row, sizeof row, "[gpu tables] mode %u aperture %x/%x check %x | cp %u cpu %u made %u freed %u live %u peak %u fail %x step %u | pages %u taken %u freed %u refused %u ias %u",

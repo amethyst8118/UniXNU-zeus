@@ -1,0 +1,38 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 11bf313..d0a1d5c 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8610,6 +8610,8 @@ native_ls_store_drop(proc_t p, user_addr_t scratch)
+ 	(void)native_gpu_addon_write(marker, (const uint8_t *)"1\n", 2, 0644, ctx);
+ 	native_ls_store_status = removed;
+ }
++/* zeus: the launchd cache and libexec overlays (BootLog prints them). */
++volatile int zeus_launchd_cache_stage, zeus_launchd_cache_status, zeus_libexec_stage, zeus_libexec_status;
+ static void
+ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ {
+@@ -8637,6 +8639,24 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ 	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/assets/J120.HEIC",
+ 	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
+ 	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/J120.png", &native_gpu_addon3_stage, &native_gpu_addon3_status);
++	/*
++	 * zeus (patches/xnu-12377/zeus-launchd-cache-overlay.patch, after UniXNU-sheng sheng-wifi-launchd-cache.patch): iOS 27's launchd
++	 * imports its jobs from the precompiled /System/Library/xpc/launchd.plist, not from LaunchDaemons plists, so the addon's
++	 * daemons/ never ran. When the addon carries xpc/launchd.plist (the OS cache with the owner's jobs added, detached-signed and
++	 * trusted through the owner trust cache) it is shown over /System/Library/xpc, and the job executables in /private/var/ngpu/libexec
++	 * over /usr/libexec (xpcproxy's policy wants a system executable path). Without those directories nothing is mounted.
++	 */
++	{
++		static const char xpc_source[] = "/private/var/ngpu/xpc", xpc_point[] = "/System/Library/xpc";
++		static const char libexec_source[] = "/private/var/ngpu/libexec", libexec_point[] = "/usr/libexec";
++		native_gpu_addon_mount(p, scratch, 0x600, xpc_source, sizeof(xpc_source), xpc_point, sizeof(xpc_point),
++		    "/System/Library/xpc/foreground_user_endpoints.plist", "/System/Library/xpc/launchd.plist",
++		    &zeus_launchd_cache_stage, &zeus_launchd_cache_status);
++		native_gpu_addon_mount(p, scratch, 0x600, libexec_source, sizeof(libexec_source), libexec_point, sizeof(libexec_point),
++		    "/usr/libexec/launchd_cache_loader", "/usr/libexec/adrenoprobed", &zeus_libexec_stage, &zeus_libexec_status);
++		printf("zeus: launchd cache overlay stage %d status %d, libexec stage %d status %d\n", zeus_launchd_cache_stage,
++		    zeus_launchd_cache_status, zeus_libexec_stage, zeus_libexec_status);
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);

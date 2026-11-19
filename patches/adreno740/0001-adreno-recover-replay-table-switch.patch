@@ -1,0 +1,48 @@
+diff --git a/NativeAdrenoSubmit.cpp b/NativeAdrenoSubmit.cpp
+index f58f7f2..273a402 100644
+--- a/NativeAdrenoSubmit.cpp
++++ b/NativeAdrenoSubmit.cpp
+@@ -299,6 +299,22 @@ IOReturn NativeAdrenoSubmit::useVm(NativeAdrenoVm *vm,const NativeAdrenoRingCloc
+     native_adreno_table_switches[1]=native_adreno_table_switches[1]+1;
+     table_vm_=vm;return kIOReturnSuccess;
+ }
++/* The table switch of a recovery replay. Mode 1 (the CPU writes TTBR0) cannot use useVm there: waitAll would wait for the jobs after
++ * the hung one, which are still active but not issued again on the restarted ring, and Submit::wait finds no ring for their fences
++ * (kIOReturnBadArgument; zeus 2026-11-19: recover stopped at step 5 and the GPU stayed poisoned). Every job replayed so far is on ring 0,
++ * so the switch waits for that ring to drain, as useVm's waitAll would outside a replay. Mode 0 and 2 are useVm unchanged. */
++IOReturn NativeAdrenoSubmit::useVmReplay(NativeAdrenoVm *vm,const NativeAdrenoRingClock *clock)
++{
++    if(table_mode_!=1)return useVm(vm,clock);
++    if(vm==table_vm_)return kIOReturnSuccess;
++    if(!clock)return kIOReturnBadArgument;
++    IOReturn status=ring(0)->idle(clock,2000000);
++    if(status)return status;
++    status=write_table_(table_cookie_,vm->ttbr0());
++    if(status)return poison();
++    native_adreno_table_switches[1]=native_adreno_table_switches[1]+1;
++    table_vm_=vm;return kIOReturnSuccess;
++}
+ IOReturn NativeAdrenoSubmit::forgetVm(NativeAdrenoVm *vm,const NativeAdrenoRingClock *clock,uint32_t timeout_us)
+ {
+     if(!attached_ || poisoned_)return kIOReturnNotReady;
+@@ -1204,7 +1220,7 @@ IOReturn NativeAdrenoSubmit::recover(NativeAdrenoRestart restart,void *cookie,co
+         Job *job=find(next);
+         NativeAdrenoVm *vm=job && job->vm?job->vm:vm_;
+         const bool run=job && !vm->unusable() && job->word_count;
+-        status=useVm(vm,clock);
++        status=useVmReplay(vm,clock);
+         if(status) {native_adreno_recover_trace[0]=5;native_adreno_recover_trace[1]=uint32_t(status);return poison();}
+         ring(0)->useContext(job?job->context:0);
+         uint32_t value=0;
+diff --git a/NativeAdrenoSubmit.h b/NativeAdrenoSubmit.h
+index 4e6507c..7f6c2b9 100644
+--- a/NativeAdrenoSubmit.h
++++ b/NativeAdrenoSubmit.h
+@@ -117,6 +117,7 @@ private:
+     void *table_cookie_=nullptr;
+     IOReturn (*write_table_)(void *,uint64_t ttbr0)=nullptr;
+     IOReturn useVm(NativeAdrenoVm *,const NativeAdrenoRingClock *,unsigned index=0);
++    IOReturn useVmReplay(NativeAdrenoVm *,const NativeAdrenoRingClock *);
+     NativeAdrenoRing *ring_=nullptr;
+     /* Ring 0 serves requested high priorities; ring 1 serves normal and low work in mode 2.
+      * Queue ordering is preserved across priority changes. Board policy enables preemption. */

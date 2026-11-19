@@ -1,5 +1,5 @@
 diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
-index 2eadcf0..0f46119 100644
+index 2eadcf0..f749eb6 100644
 --- a/osfmk/arm/pmap/pmap.c
 +++ b/osfmk/arm/pmap/pmap.c
 @@ -1967,6 +1967,80 @@ pmap_construct_io_pte(pmap_paddr_t paddr, pt_entry_t tmplate)
@@ -12,8 +12,8 @@ index 2eadcf0..0f46119 100644
 + * and is_dram_addr() calls them "not DRAM", so every CPU mapping of them was Device memory: VM_WIMG_WCOMB/RT fell back to
 + * Device-GRE in wimg_to_pte and pmap_cache_attributes answered VM_WIMG_IO for default mappings (PAR_EL1 attribute 0x0c in
 + * boot-pool3; DC ZVA in bzero and user-space memset faulted, backboardd crashed). A range added here is DRAM for this pmap:
-+ * write-combined and real-time mappings become Normal Non-cacheable, default mappings Normal write-back (the GPU is proved
-+ * IO-coherent before the pool serves anything). is_dram_addr() itself is unchanged for every other user.
++ * write-combined, real-time and default mappings become Normal Non-cacheable (default = VM_WIMG_WCOMB, as the pool maps
++ * its BOs: owned BOs are not snooped by the GPU, so no CPU mapping of them may be cacheable). is_dram_addr() itself is unchanged for every other user.
 + * The table only grows; entries are written before the count is published, so readers need no lock.
 + */
 +#define ZEUS_EXTRA_DRAM_MAX 8
@@ -158,12 +158,15 @@ index 2eadcf0..0f46119 100644
  			pte = ARM_PTE_ATTRINDX(CACHE_ATTRINDX_WRITECOMB);
  		} else {
  #if HAS_FEAT_XS
-@@ -10682,6 +10756,9 @@ pmap_cache_attributes(
+@@ -10682,6 +10756,12 @@ pmap_cache_attributes(
  
  	if (!pa_valid(paddr)) {
  		pmap_io_range_t *io_rgn = pmap_find_io_attr(paddr);
 +		if (io_rgn == NULL && zeus_extra_dram_addr(paddr)) {
-+			return VM_WIMG_DEFAULT;    /* zeus: board-owned DRAM outside the window (zeus_pmap_add_dram) */
++			/* zeus: board-owned DRAM outside the window (zeus_pmap_add_dram). Write-combined, as the GPU pool maps its BOs: the GPU
++			 * reads owned BOs without snooping, so a default mapping must not be cacheable (an alias with dirty lines the GPU never
++			 * sees glitched the UI in boot-pooldram). */
++			return VM_WIMG_WCOMB;
 +		}
  		return (io_rgn == NULL) ? VM_WIMG_IO : io_rgn->wimg;
  	}

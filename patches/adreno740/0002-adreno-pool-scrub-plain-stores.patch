@@ -1,0 +1,43 @@
+diff --git a/NativeAdrenoCpu.cpp b/NativeAdrenoCpu.cpp
+index 944e93a..629b5d1 100644
+--- a/NativeAdrenoCpu.cpp
++++ b/NativeAdrenoCpu.cpp
+@@ -2,6 +2,7 @@
+ #include "NativeAdrenoMemory.h"
+ #include "NativeAdrenoPool.h"
+ #include <IOKit/IOMemoryDescriptor.h>
++#include <IOKit/IOLib.h>
+ #include <kern/cpu_data.h>
+ #include <vm/vm_map.h>
+ #include <mach/vm_param.h>
+@@ -191,6 +192,10 @@ void *NativeAdrenoPoolMapRange(uint64_t physical,size_t bytes,void **owner)
+ /* The run each CPU is zero-filling (physical address, bytes), 0 between fills: a store the system refuses panics in the fill, and
+  * the board's panic record names the run. */
+ extern "C" {volatile uint64_t native_adreno_pool_scrubbing[16][2];}
++/* zeus: the stage-1 attributes of the first scrub mapping (PAR_EL1 after AT S1E1W: bit 0 fault, [63:56] the MAIR attribute, 0x44 normal
++ * non-cacheable), and scrubs made. A bzero of a pool run panicked on its first DC ZVA (alignment fault: the memory behaved as Device), so
++ * the fill is plain aligned 64-bit stores, which either memory type takes. */
++extern "C" {volatile uint64_t native_adreno_pool_scrub_par[2];}
+ extern "C" int cpu_number(void);
+ IOReturn NativeAdrenoPoolScrub(void *mapping,size_t bytes,bool drop_lines)
+ {
+@@ -207,7 +212,18 @@ IOReturn NativeAdrenoPoolScrub(void *mapping,size_t bytes,bool drop_lines)
+     if(!status) {
+         volatile uint64_t *const mine=native_adreno_pool_scrubbing[(unsigned)cpu_number()&15];
+         mine[1]=bytes;mine[0]=physical;
+-        bzero(address,bytes);
++        if(!native_adreno_pool_scrub_par[1]) {
++            uint64_t par=0;
++            __asm__ volatile("at s1e1w, %1
++ isb
++ mrs %0, par_el1":"=r"(par):"r"(address):"memory");
++            native_adreno_pool_scrub_par[0]=par;
++            IOLog("adreno pool: scrub mapping of 0x%llx: PAR_EL1 0x%llx
++",(unsigned long long)physical,(unsigned long long)par);
++        }
++        native_adreno_pool_scrub_par[1]=native_adreno_pool_scrub_par[1]+1;
++        volatile uint64_t *const words=static_cast<volatile uint64_t *>(address);
++        for(size_t i=0;i<bytes/8;i+=8) {words[i]=0;words[i+1]=0;words[i+2]=0;words[i+3]=0;words[i+4]=0;words[i+5]=0;words[i+6]=0;words[i+7]=0;}
+         __asm__ volatile("dsb sy":::"memory");
+         mine[0]=0;
+     }

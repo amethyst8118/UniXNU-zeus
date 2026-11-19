@@ -1,0 +1,69 @@
+diff --git a/NativeAdrenoPublish.cpp b/NativeAdrenoPublish.cpp
+index cf790cb..03812ca 100644
+--- a/NativeAdrenoPublish.cpp
++++ b/NativeAdrenoPublish.cpp
+@@ -270,14 +270,25 @@ extern "C" void native_adreno_set_restart(NativeAdrenoRestart restart,void *cook
+ }
+ /* msm's hangcheck timer: every DRM_MSM_HANGCHECK_DEFAULT_PERIOD (500 ms, msm_gpu.h) the ring is checked for progress; a hang restarts the
+  * GPU through the board's hook and replays the other submissions (recover_worker). Without a hook a hang is only counted. */
++/* zeus (patches/adreno740/0004): every GPU hang on zeus is a translation fault (FSR 0x80000002) that the hang check took ~2 s to end
++ * (four 500 ms looks with progress retries), the UI frozen meanwhile. While the bank holds a fault the check looks every 50 ms and needs
++ * only the fence to stand still between two looks: a fault ends in ~0.1 s. [0] looks that saw a fault, [1] hangs declared so. */
++extern "C" {volatile uint32_t native_adreno_fault_fast[2];}
+ static void nativeAdrenoHangcheck(void *,wait_result_t)
+ {
++    bool faulted=false;
+     for(;;) {
+-        IOSleep(500);
++        IOSleep(faulted?50:500);
+         IOLockLock(g.lock);
++        {
++            uint32_t seen[4]={};
++            faulted=g.vm && !g.vm->faultState(seen) && (seen[0]&0x1fe);
++            if(faulted)native_adreno_fault_fast[0]=native_adreno_fault_fast[0]+1;
++        }
+         bool hung=false;
+-        if(g.submit && !g.submit->hangCheck(&hung) && hung) {
++        if(g.submit && !g.submit->hangCheck(&hung,faulted) && hung) {
+             native_adreno_recovery[0]=native_adreno_recovery[0]+1;
++            if(faulted)native_adreno_fault_fast[1]=native_adreno_fault_fast[1]+1;
+             if(g.restart) {
+                 uint32_t fault[4]={};
+                 if(g.context && !g.context->endFault(fault) && fault[0]) {
+diff --git a/NativeAdrenoSubmit.cpp b/NativeAdrenoSubmit.cpp
+index 4af6bd9..56748b5 100644
+--- a/NativeAdrenoSubmit.cpp
++++ b/NativeAdrenoSubmit.cpp
+@@ -1119,7 +1119,7 @@ bool NativeAdrenoSubmit::madeProgress()
+     ++progress_retries_;
+     return true;
+ }
+-IOReturn NativeAdrenoSubmit::hangCheck(bool *hung)
++IOReturn NativeAdrenoSubmit::hangCheck(bool *hung,bool faulted)
+ {
+     if(!hung)return kIOReturnBadArgument;*hung=false;
+     if(!attached_ || poisoned_)return kIOReturnNotReady;
+@@ -1149,7 +1149,7 @@ IOReturn NativeAdrenoSubmit::hangCheck(bool *hung)
+     uint32_t fence=0;
+     if(r->observeFence(last,nullptr,0,&fence)==NativeAdrenoRingFencePoisoned)return poison();
+     if(fence!=hang_fence_) {hang_fence_=fence;progress_retries_=0;return kIOReturnSuccess;}
+-    if(fence>=last || madeProgress())return kIOReturnSuccess;
++    if(fence>=last || (!faulted && madeProgress()))return kIOReturnSuccess;
+     progress_retries_=0;++stats_.hangs;*hung=true;
+     /* Where the CP stopped, before the restart clears it. */
+     native_adreno_stall_hang=0;
+diff --git a/NativeAdrenoSubmit.h b/NativeAdrenoSubmit.h
+index 7f6c2b9..c9caa0b 100644
+--- a/NativeAdrenoSubmit.h
++++ b/NativeAdrenoSubmit.h
+@@ -263,7 +263,9 @@ public:
+     /* msm's hangcheck_handler, for the caller to run every DRM_MSM_HANGCHECK_DEFAULT_PERIOD (500 ms): *hung when the ring fence did not move
+      * since the last check while work is pending and the CP made no progress either (a6xx_progress: IB1/IB2 base and remaining words, at
+      * most DRM_MSM_HANGCHECK_PROGRESS_RETRIES (3) checks in a row on one fence). */
+-    IOReturn hangCheck(bool *hung);
++    /* faulted (zeus, patches/adreno740/0004): the context bank holds a translation fault, so a stopped fence is a hang at the second
++     * look without the progress retries (a faulted GPU does not finish the job; the retries only stretched each fault to ~2 s). */
++    IOReturn hangCheck(bool *hung,bool faulted=false);
+     /* msm's recover_worker: the job on the hung fence is the guilty one (its VM is marked, NativeAdrenoVm::noteHang), the ring fence
+      * moves past it, restart resets the GPU, the guilty job is retired, then every later job is submitted again with its own fence
+      * (a job of an unusable VM without its buffers). Callers serialize this with every other method. A failed restart poisons. */

@@ -303,6 +303,7 @@ extern char vt_host_trace[64][112] __attribute__((weak_import));
 extern volatile uint32_t vt_host_trace_count __attribute__((weak_import));
 extern volatile uint32_t iris_media_stats[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_fault_fast[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recover_trace[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_vm_fail[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_global_fault[4] __attribute__((weak_import));
@@ -1366,6 +1367,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[3] : 0, &native_adreno_recovery_fault ? native_adreno_recovery_fault[2] : 0,
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[4] : 0);
     at = put(out, at, cap, row, sizeof row);
+    // patches/adreno740/0004: hang-check looks that found a latched fault (50 ms apart) and hangs declared at once for it.
+    if (&native_adreno_fault_fast && native_adreno_fault_fast[0]) {
+      snprintf(row, sizeof row, "[gpu fault fast] looks %u hangs %u", native_adreno_fault_fast[0], native_adreno_fault_fast[1]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     // Where the last recover() stopped: step (1 fence read, 2 restart hook, 3 table write, 4 nop, 5 replay vm, 6 replay submit), the status there, fence, last submitted.
     // An address space taken out of use: how many, the last one's status, source line (NativeAdrenoVm.cpp) and 1 for a process's.
     if (&native_adreno_vm_fail && native_adreno_vm_fail[0]) {

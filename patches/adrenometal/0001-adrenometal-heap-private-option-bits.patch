@@ -1,0 +1,17 @@
+diff --git a/NativeBridgeMetalFrontend.mm b/NativeBridgeMetalFrontend.mm
+index 65b8aa5..a2481bc 100644
+--- a/NativeBridgeMetalFrontend.mm
++++ b/NativeBridgeMetalFrontend.mm
+@@ -4423,7 +4423,11 @@ - (NSUInteger)recommendedMaxWorkingSetSize {
+ }
+ - (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d {
+  if(!d)return nil;
+- NmbHeap *handle=nmb_heap_new(gDevice,d.type,d.size,(uint64_t)d.resourceOptions);
++ // Metal's private resource-option bits 21 and 22 (0x600000; cameracaptured's heaps pass 0x600200) are not defined for the runtime, whose
++ // ResourceOptions::from_raw refuses any unknown bit: the heap was refused and cameracaptured restarted in a loop (zeus 2026-11-19). The heap
++ // is made without them; it reports the options it was asked for.
++ const uint64_t heapOptions=(uint64_t)d.resourceOptions&~(uint64_t)0x600000;
++ NmbHeap *handle=nmb_heap_new(gDevice,d.type,d.size,heapOptions);
+  if(!handle){NBLOG(@"native-metal: heap refused: %@",lastError());return nil;}
+  NBHeap *heap=[NBHeap new];heap.handle=handle;heap.options=d.resourceOptions;heap.heapType=d.type;return (id<MTLHeap>)heap;
+ }

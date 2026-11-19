@@ -1,0 +1,131 @@
+diff --git a/NativeLegacyDisplay.cpp b/NativeLegacyDisplay.cpp
+index e53a635..6fb6814 100644
+--- a/NativeLegacyDisplay.cpp
++++ b/NativeLegacyDisplay.cpp
+@@ -59,6 +59,11 @@ extern "C" {volatile uint32_t native_legacy_surfaces[14];}
+ // [9] swaps held back until the GPU had written the frame (the compositor submits the swap when the command buffer is scheduled), [10] total
+ // and [11] longest wait (us), [12] waits that reached 250 ms, [13] waits of 8 ms or more (longer than a refresh at 120 Hz: the frame missed a flip).
+ extern "C" {volatile uint32_t native_legacy_direct[14];}
++// fb-render=PCT (zeus, patches/gopframebuffer/0002): the compositor draws PCT % of the panel's size in each direction and the display pipes'
++// scalers (QSEED, bilinear, no coefficient tables) stretch it to the panel. [0] PCT in use (0: off), [1] render width << 16 | height,
++// [2]/[3] VIG 0/1 scaler version, [4] status (1 on; 2 refused: version or pipe outputs not as expected; 3 no MDP mapping), [5] horizontal
++// and [6] vertical phase step (21 fraction bits), [7] VIG 1's source x << 16 | fetched width.
++extern "C" {volatile uint32_t native_legacy_scale[8];}
+ extern "C" bool native_adreno_fences(uint32_t *submitted,uint32_t *retired) __attribute__((weak_import));
+ extern "C" bool native_adreno_fences_detail(uint32_t *,uint32_t *,uint32_t *) __attribute__((weak_import));
+ // The swap lifecycle: native_legacy_ring holds the newest native_legacy_ring_cap events (allocated at start: a static array of this size no longer fits the kernel's data segment), {[0] microseconds since boot (64 bit), [1] event << 56 | slot + 1 << 48 |
+@@ -304,8 +309,54 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
+     // The boot loader's scanout as VIG 0 fetches it when direct scanout starts (zeus: 0xb8000000, stride 0x1680; sheng 0x2fa0); the
+     // constants above only when the pipe reads back nothing.
+     uint32_t bootIova=kBootIova,bootStride=kBootStride;
++    // fb-render: the panel (boot framebuffer) size and the smaller size the display reports and the compositor draws; equal when off.
++    uint32_t panelW=0,panelH=0,renderW=0,renderH=0;
++    // The two pipes' scalers, after redfin's 0948 sweet_mdp_scale (DenialOfGravity/ios-redfin, MIT; verified on lito's QSEED3LITE): one
++    // phase step for the whole width so the halves meet, VIG 1 starting at its own source column and phase, each fetching the columns its
++    // half samples plus one (bilinear reads the next column). Pipe outputs, LM, DSC and the interface stay as the boot loader set them.
++    // Set once when direct scanout starts; every later flip changes only the address and stride, the boot memory included.
++    bool setupScaler() {
++        constexpr uint32_t QS=0xa00;   // SM8450 VIG scaler block ("qseed", as lito's qseedv3lite at +0xa00)
++        const uint32_t sw=renderW,sh=renderH;
++        const uint32_t ver0=mdp[(kVig[0]+QS)/4],ver1=mdp[(kVig[1]+QS)/4];
++        const uint32_t out0=mdp[(kVig[0]+0x0c)/4],out1=mdp[(kVig[1]+0x0c)/4];
++        const uint32_t dw0=out0&0xffff,dw1=out1&0xffff,dh=out0>>16,W=dw0+dw1;
++        native_legacy_scale[2]=ver0;native_legacy_scale[3]=ver1;
++        if(ver0<0x2000 || ver0!=ver1 || !dh || dh!=(out1>>16) || W!=panelW || dh!=panelH || !sw || !sh){native_legacy_scale[4]=2;return false;}
++        const uint64_t stepX=((1ull<<21)*sw+W/2)/W,stepY=((1ull<<21)*sh+dh/2)/dh;
++        for(unsigned p=0;p<2;++p) {
++            const uint32_t b=kVig[p],dw=p?dw1:dw0;
++            const uint64_t pos=uint64_t(p?dw0:0)*stepX;
++            const uint32_t sx=uint32_t(pos>>21),phase=uint32_t(pos&0x1fffff);
++            uint32_t cw=uint32_t((pos+uint64_t(dw-1)*stepX)>>21)-sx+2;
++            if(sx+cw>sw)cw=sw-sx;
++            const uint32_t crop=sh<<16|cw;
++            uint32_t op=1u|3u<<16|1u<<14|1u<<31;            // on, Y/RGB bilinear, 8-bit (not DX) format, blend cfg
++            if(mdp[(b+0x30)/4]&(1u<<8))op|=1u<<10|1u<<29;   // the pipe's format has alpha: alpha through the scaler, bilinear
++            mdp[(b+0x04)/4]=sh<<16|sw;                       // SRC_IMG
++            mdp[(b+0x08)/4]=sx;                              // SRC_XY
++            mdp[(b+0x00)/4]=crop;                            // SRC_SIZE
++            for(uint32_t c=0;c<3;++c) {                      // pixel extension C0/C1C2/C3: none, requested pixels = the crop
++                mdp[(b+0x100+0x10*c)/4]=0;mdp[(b+0x104+0x10*c)/4]=0;mdp[(b+0x108+0x10*c)/4]=crop;
++            }
++            mdp[(b+QS+0x10)/4]=uint32_t(stepX)&0xffffff;mdp[(b+QS+0x18)/4]=uint32_t(stepX)&0xffffff;
++            mdp[(b+QS+0x14)/4]=uint32_t(stepY)&0xffffff;mdp[(b+QS+0x1c)/4]=uint32_t(stepY)&0xffffff;
++            mdp[(b+QS+0x90)/4]=phase;mdp[(b+QS+0x98)/4]=phase;mdp[(b+QS+0x94)/4]=0;mdp[(b+QS+0x9c)/4]=0;
++            mdp[(b+QS+0x20)/4]=0x03040304u;                  // preload: DPU_QSEED3_DEFAULT_PRELOAD_H 4, _V 3
++            mdp[(b+QS+0x40)/4]=crop;mdp[(b+QS+0x44)/4]=crop;
++            mdp[(b+QS+0x48)/4]=dh<<16|dw;                    // DST_SIZE
++            mdp[(b+QS+0x04)/4]=op;                           // OP_MODE
++            if(p)native_legacy_scale[7]=sx<<16|cw;
++        }
++        __asm__ volatile("dsb sy" ::: "memory");
++        mdp[kCtlFlush/4]=0x3;
++        __asm__ volatile("dsb sy" ::: "memory");
++        native_legacy_scale[5]=uint32_t(stepX);native_legacy_scale[6]=uint32_t(stepY);native_legacy_scale[4]=1;
++        return true;
++    }
+     void startDirect() {
+         unsigned mode=0;PE_parse_boot_argn("dpu-scanout",&mode,sizeof(mode));
++        if(renderW!=panelW || renderH!=panelH)native_legacy_scale[4]=3;   // until setupScaler runs
+         if(mode<2 || !&native_ufs_dpu_map || !&native_ufs_dpu_state || !(native_ufs_dpu_state>>31) || !primary)return;
+         IODeviceMemory *memory=IODeviceMemory::withRange(0xae01000,0x8f000);
+         mdpMap=memory?memory->map(kIOMapAnywhere|kIOMapInhibitCache):nullptr;
+@@ -321,6 +372,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
+         }
+         mdp=reinterpret_cast<volatile uint32_t *>(mdpMap->getVirtualAddress());
+         {const uint32_t iova=mdp[(kVig[0]+0x14)/4],stride=mdp[(kVig[0]+0x24)/4]&0xffff;if(iova && stride){bootIova=iova;bootStride=stride;}}
++        if(renderW!=panelW || renderH!=panelH)(void)setupScaler();
+         directOn=true;gDirectDisplay=this;
+     }
+     // The diagnostic screenshot reads the boot memory, which the display no longer scans: draw the surface on screen into it (rows of the
+@@ -330,7 +382,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
+         if(!directOn || directBoot || shownSlot<0 || !bootMapping || !shownStride)return;
+         IOMemoryDescriptor *source=directSlots[shownSlot].memory;
+         PE_Video video={};uint32_t width=0,height=0;getDisplayDimensions(&width,&height);
+-        if(!source || PE_current_console(&video) || video.v_baseAddr!=bootMapping->getPhysicalAddress() || video.v_width!=width || video.v_height!=height)return;
++        if(!source || PE_current_console(&video) || video.v_baseAddr!=bootMapping->getPhysicalAddress() || video.v_width!=panelW || video.v_height!=panelH)return;
+         uint8_t *out=reinterpret_cast<uint8_t *>(bootMapping->getVirtualAddress());
+         for(uint32_t y=0;y<height && uint64_t(y+1)*video.v_rowBytes<=bootMapping->getLength();++y)
+             if(source->readBytes(uint64_t(y)*shownStride,out+uint64_t(y)*video.v_rowBytes,uint64_t(width)*4)!=uint64_t(width)*4)return;
+@@ -625,7 +677,7 @@ public:
+             uint32_t bw=0,bh=0;getDisplayDimensions(&bw,&bh);
+             uint64_t blankLength=(uint64_t)bw*bh*4;
+             if(PE_current_console(&blank) || blank.v_baseAddr!=bootMapping->getPhysicalAddress() ||
+-               blank.v_width!=bw || blank.v_height!=bh || blank.v_depth!=32 || blank.v_rotate ||
++               blank.v_width!=panelW || blank.v_height!=panelH || blank.v_depth!=32 || blank.v_rotate ||
+                !native_legacy_surface_bounds(bw,bh,blank.v_rowBytes,bootMapping->getLength(),bootMapping->getLength())) {
+                 native_legacy_transfer_observed(kIOReturnNotReady,request,0);return;
+             }
+@@ -656,7 +708,7 @@ public:
+            native_legacy_surface_width(surface)<width || native_legacy_surface_height(surface)<height ||
+            !nativeScanoutFormat(native_legacy_surface_format(surface),native_legacy_surface_planes(surface)) ||
+            PE_current_console(&video) || video.v_baseAddr!=bootMapping->getPhysicalAddress() ||
+-           video.v_width!=width || video.v_height!=height || video.v_depth!=32 || video.v_rotate ||
++           video.v_width!=panelW || video.v_height!=panelH || video.v_depth!=32 || video.v_rotate ||
+            !native_legacy_surface_bounds(width,height,video.v_rowBytes,bootMapping->getLength(),bootMapping->getLength())) {
+             native_legacy_transfer_observed(kIOReturnNotReady,request,0);return;
+         }
+@@ -1006,12 +1058,21 @@ public:
+         bool valid=mapping->getVirtualAddress() && mapping->getPhysicalAddress()==video.v_baseAddr &&
+                    mapping->getLength()==video.v_rowBytes*video.v_height;
+         if(valid) {
+-            installBootDimensions((uint32_t)video.v_width,(uint32_t)video.v_height);
++            panelW=(uint32_t)video.v_width;panelH=(uint32_t)video.v_height;renderW=panelW;renderH=panelH;
++            {
++                // fb-render=PCT, only with direct scanout (the pipes' scalers stretch every frame, the boot memory's too) and an exact size.
++                unsigned pct=100,scan=0;PE_parse_boot_argn("fb-render",&pct,sizeof(pct));PE_parse_boot_argn("dpu-scanout",&scan,sizeof(scan));
++                if(pct>=50 && pct<100 && scan>=2 && !(panelW*pct%100) && !(panelH*pct%100)) {
++                    renderW=panelW*pct/100;renderH=panelH*pct/100;
++                    native_legacy_scale[0]=pct;native_legacy_scale[1]=renderW<<16|renderH;
++                }
++            }
++            installBootDimensions(renderW,renderH);
+             uint32_t width=0,height=0;getDisplayDimensions(&width,&height);
+-            valid=width==video.v_width && height==video.v_height;
++            valid=width==renderW && height==renderH;
+             if(valid) {
+                 OSSafeReleaseNULL(bootMapping);bootMapping=mapping;mapping=nullptr;primary=video.v_display==1;
+-                valid=native_legacy_gop_mapping_observed(this,bootMapping,width,height);
++                valid=native_legacy_gop_mapping_observed(this,bootMapping,panelW,panelH);
+ #if defined(NATIVE_LEGACY_DEFAULT_SURFACE) && NATIVE_LEGACY_DEFAULT_SURFACE
+                 // The family calls its void slot 316 after startHardware. Our backend supplies the client's default surface.
+                 if(valid)valid=installDefaultSurface(width,height);

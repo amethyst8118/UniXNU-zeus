@@ -246,6 +246,7 @@ extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_impor
 extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
 extern volatile uint32_t native_gop_wait_reasons[4] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_direct[14] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_scale[8] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_state __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_check[8] __attribute__((weak_import));
 extern uint32_t native_ufs_dpu_live(unsigned reg) __attribute__((weak_import));
@@ -1937,6 +1938,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u | held for the GPU %u total %uus longest %uus waits>=250ms %u waits>=8ms %u",
                     d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13]);
     }
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // fb-render (patches/gopframebuffer/0002): the size the compositor draws and the pipes' scalers that stretch it to the panel.
+  if (log_display_on && &native_legacy_scale && native_legacy_scale[0]) {
+    char row[200];
+    const volatile uint32_t *s = native_legacy_scale;
+    snprintf(row, sizeof row, "[render scale] %u%% %ux%u | scaler v%x/v%x status %u (1 on, 2 refused, 3 no MDP) step %x/%x | vig1 x %u w %u",
+             s[0], s[1] >> 16, s[1] & 0xffff, s[2], s[3], s[4], s[5], s[6], s[7] >> 16, s[7] & 0xffff);
     at = put(out, at, cap, row, sizeof row);
   }
   // The centre pixel of the last sampled half-float frame, in thousandths (1000 = 1.0): a known grey shown there tells whether the compositor

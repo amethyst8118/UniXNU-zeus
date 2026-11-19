@@ -21,19 +21,16 @@ index 944e93a..629b5d1 100644
  extern "C" int cpu_number(void);
  IOReturn NativeAdrenoPoolScrub(void *mapping,size_t bytes,bool drop_lines)
  {
-@@ -207,7 +212,18 @@ IOReturn NativeAdrenoPoolScrub(void *mapping,size_t bytes,bool drop_lines)
+@@ -207,7 +212,15 @@ IOReturn NativeAdrenoPoolScrub(void *mapping,size_t bytes,bool drop_lines)
      if(!status) {
          volatile uint64_t *const mine=native_adreno_pool_scrubbing[(unsigned)cpu_number()&15];
          mine[1]=bytes;mine[0]=physical;
 -        bzero(address,bytes);
 +        if(!native_adreno_pool_scrub_par[1]) {
 +            uint64_t par=0;
-+            __asm__ volatile("at s1e1w, %1
-+ isb
-+ mrs %0, par_el1":"=r"(par):"r"(address):"memory");
++            __asm__ volatile("at s1e1w, %1\n isb\n mrs %0, par_el1":"=r"(par):"r"(address):"memory");
 +            native_adreno_pool_scrub_par[0]=par;
-+            IOLog("adreno pool: scrub mapping of 0x%llx: PAR_EL1 0x%llx
-+",(unsigned long long)physical,(unsigned long long)par);
++            IOLog("adreno pool: scrub mapping of 0x%llx: PAR_EL1 0x%llx\n",(unsigned long long)physical,(unsigned long long)par);
 +        }
 +        native_adreno_pool_scrub_par[1]=native_adreno_pool_scrub_par[1]+1;
 +        volatile uint64_t *const words=static_cast<volatile uint64_t *>(address);

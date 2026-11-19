@@ -530,7 +530,15 @@ void gmuHfiAndGx() {
   }
   for (unsigned i = 0; i < 12; ++i) for (unsigned j = 0; j < 3; ++j) bw[31 + 8 * i + j] = kDdr[i][j];
   printf("ZEUS GPU: votes 220 MHz %08x, 818 MHz %08x, GMU 200 MHz %08x; SH0 %x MC0 %x ACV %x\n", perf[5], perf[2 + 36], perf[52], bw[23], bw[24], bw[25]);
-  const uint32_t empty = 0, vote[3] = {1, 1, 3};   // blocking ack, GPU level 1 (220 MHz), bandwidth level 3
+  // Blocking ack, GPU level (kGpu index; default 1 = 220 MHz), bandwidth level (kDdr index; default 3). The vote stays for the boot:
+  // there is no frequency governor yet (sheng's gpu-dcvs), so gpu-level / gpu-bw pick a fixed operating point.
+  unsigned gpuLevel = 1, bwLevel = 3;
+  PE_parse_boot_argn("gpu-level", &gpuLevel, sizeof gpuLevel);
+  PE_parse_boot_argn("gpu-bw", &bwLevel, sizeof bwLevel);
+  if (gpuLevel < 1 || gpuLevel >= perf[0]) gpuLevel = 1;
+  if (bwLevel >= 12) bwLevel = 3;
+  const uint32_t empty = 0, vote[3] = {1, gpuLevel, bwLevel};
+  printf("ZEUS GPU: vote GPU level %u (%u MHz), bandwidth level %u\n", gpuLevel, kGpu[gpuLevel].khz / 1000, bwLevel);
   gmuWr(GMU2HOST_INTR_CLR, 0xffffffffu);
   if (!hfiSend("PERF_TABLE", 4, perf, 58) || !hfiSend("BW_TABLE", 3, bw, 159) || !hfiSend("CORE_FW_START", 14, &empty, 1) || !hfiSend("START", 10, &empty, 1)) return;
   gmuWr(GMU2HOST_INTR_CLR, 0xffffffffu);

@@ -1970,8 +1970,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (log_display_on && &native_ufs_dpu_smmu && native_ufs_dpu_smmu[0]) {
     char row[300];
     const volatile uint32_t *u = native_ufs_dpu_smmu;
-    snprintf(row, sizeof row, "[dpu smmu] %x scr0=%x idr0=%x idr1=%x | 1c00 %x %x %x cbar=%x/%x sctlr=%x ttbr0=%x%08x tcr=%x fsr=%x"
-             " | 1c02 %x %x %x cbar=%x/%x sctlr=%x ttbr0=%x%08x tcr=%x fsr=%x", u[0], u[1], u[2], u[3],
+    snprintf(row, sizeof row, "[dpu smmu] %x scr0=%x idr0=%x idr1=%x | 2800 %x %x %x cbar=%x/%x sctlr=%x ttbr0=%x%08x tcr=%x fsr=%x"
+             " | 2802 %x %x %x cbar=%x/%x sctlr=%x ttbr0=%x%08x tcr=%x fsr=%x", u[0], u[1], u[2], u[3],
              u[4], u[5], u[6], u[7], u[8], u[9], u[11], u[10], u[12], u[22], u[13], u[14], u[15], u[16], u[17], u[18], u[20], u[19], u[21], u[23]);
     at = put(out, at, cap, row, sizeof row);
   }

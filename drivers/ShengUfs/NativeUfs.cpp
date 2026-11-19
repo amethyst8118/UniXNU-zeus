@@ -310,6 +310,7 @@ extern "C" volatile uint32_t native_ufs_dpu_smmu[24];
 extern "C" volatile uint32_t native_ufs_dpu_state;
 extern "C" volatile uint32_t native_ufs_dpu_check[8];
 // The display bank's stage 1 table: L1, then L2 for the first GiB, then kDpuSlots * kDpuSlotTables L3 tables (one per 2 MiB of a slot).
+constexpr uint32_t kDpuStream = 0x2800U;   // zeus display stream (sheng: 0x1c00); the second is kDpuStream + 2
 constexpr uint32_t kDpuWindow = 0x10000000U, kDpuSlots = 4, kDpuSlotBytes = 32U << 20, kDpuSlotTables = kDpuSlotBytes >> 21;
 static uint64_t *gDpuTables;
 static uintptr_t gDpuCb;
@@ -1363,8 +1364,10 @@ static bool hostBringUp (const char **why)
     }
     native_ufs_extra_stream = 0x80000000U | extraReport[0];
   }
-  // The display's streams (dpu=2 or more, or dpu-scanout), read here for the same reason: what the boot loader left for 0x1c00 and 0x1c02 (`iommus =
-  // <&apps_smmu 0x1c00 0x2>`), the first step of letting the display fetch the compositor's pages. Nothing is written.
+  // The display's streams (dpu=2 or more, or dpu-scanout), read here for the same reason: what the boot loader left for the display's two
+  // streams, the first step of letting the display fetch the compositor's pages. Nothing is written. sheng (SM8550): 0x1c00 and 0x1c02
+  // (`iommus = <&apps_smmu 0x1c00 0x2>`). zeus (SM8450): 0x2800 and 0x2802 (live DT qcom,smmu_sde_unsec_cb `iommus = <0x9a 0x2800 0x402>`;
+  // apps_smmu `qcom,handoff-smrs = <0x2800 0x402>`: the boot loader programs that group for its splash scanout).
   uint32_t dpu = 0, scanout = 0;
   PE_parse_boot_argn ("dpu", &dpu, sizeof (dpu));
   PE_parse_boot_argn ("dpu-scanout", &scanout, sizeof (scanout));
@@ -1383,7 +1386,7 @@ static bool hostBringUp (const char **why)
       const uint32_t mask = (smr >> 16) & 0x7fff;
       for (unsigned k = 0; k < 2; ++k) {
         volatile uint32_t *r = &native_ufs_dpu_smmu[4 + 9 * k];
-        if (r[0] != 0xffffffffU || ((smr ^ (0x1c00U + 2 * k)) & 0x7fff & ~mask)) continue;
+        if (r[0] != 0xffffffffU || ((smr ^ (kDpuStream + 2 * k)) & 0x7fff & ~mask)) continue;
         const uint32_t s2cr = read32 (s, 0xc00 + 4 * i), bank = s2cr & 255;
         r[0] = i | (bank << 16); r[1] = smr; r[2] = s2cr;
         if (((s2cr >> 16) & 3) == 0 && bank < banks && (pages + banks) * 4096 <= 0xd0000) {
@@ -1654,7 +1657,7 @@ extern "C" volatile uint32_t native_ufs_extra_uncached = 0;
 extern "C" volatile uint32_t native_ufs_extra_iova = 0, native_ufs_extra_bytes = 0;
 extern "C" volatile uint32_t native_ufs_extra_atos[8] = { 0, 0, 0, 0 };
 // The display streams' state as the boot loader left it (dpu=2): [0] bit 31 read, stream-match groups | valid ones << 8 | context banks << 16;
-// [1] sCR0, [2] IDR0, [3] IDR1; for 0x1c00 at [4] and 0x1c02 at [13]: group | bank << 16 (all ones: no match), SMR, S2CR, CBAR, CBA2R, SCTLR,
+// [1] sCR0, [2] IDR0, [3] IDR1; for kDpuStream (zeus 0x2800) at [4] and kDpuStream + 2 at [13]: group | bank << 16 (all ones: no match), SMR, S2CR, CBAR, CBA2R, SCTLR,
 // TTBR0 low, high, TCR; [22], [23] the two banks' FSR.
 extern "C" volatile uint32_t native_ufs_dpu_smmu[24] = {};
 // The display bank's stage 1 (dpu-scanout): bit 31 on, low bits the bank; 0xdead000n the step that refused it (1 bank not as expected,

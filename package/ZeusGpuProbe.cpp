@@ -79,6 +79,13 @@ struct NativeAdrenoOpenRecordView {char name[20]; uint32_t type, macf, res, atta
 extern "C" NativeAdrenoMetalDiagView native_adreno_metal_diag __attribute__((weak));
 extern "C" NativeAdrenoOpenRecordView native_adreno_open_log[8] __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_open_log_count __attribute__((weak));
+// Why a user connection fails (NativeAdrenoPublish.cpp mount: [0] 1 createVm/open, 2 core open, 3 scope; [1] status; [3] count),
+// the per-process table switch state ([6] enable/createVm status, [7] createVm step) and the CP aperture SCM ([2] CP switch check, [3] table mode).
+extern "C" volatile uint32_t native_adreno_mount_fail[4] __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_table_switches[8] __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_cp_aperture[4] __attribute__((weak));
+// patches/armsmmu4k/0001: why the SMMU kit last returned ArmSmmu4KStateMismatch ([0] count, [1] where, then that check's values).
+extern "C" volatile uint32_t armsmmu4k_mismatch[20] __attribute__((weak));
 
 namespace {
 constexpr uint64_t kCmdDb = 0x80860000;   // zeus live DT: aop_cmd_db_region@80860000, size 0x20000
@@ -818,6 +825,17 @@ void metalReport(unsigned round) {
     printf("ZEUS GPU: metal %u open log %u: %.19s type %x macf %x res %x attach %x foreign %u\n", round, native_adreno_open_log_count, r.name,
            r.type, r.macf, r.res, r.attach, r.foreign);
   }
+  if (&native_adreno_mount_fail && &native_adreno_table_switches && &native_adreno_cp_aperture) {
+    const volatile uint32_t *m = native_adreno_mount_fail, *t = native_adreno_table_switches, *c = native_adreno_cp_aperture;
+    printf("ZEUS GPU: metal %u mount fail %x %x %x n %u switch %x %x %x %x %x %x %x %x aperture %x %x %x %x\n", round, m[0], m[1], m[2], m[3],
+           t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], c[0], c[1], c[2], c[3]);
+  }
+  if (&armsmmu4k_mismatch && armsmmu4k_mismatch[0]) {
+    const volatile uint32_t *x = armsmmu4k_mismatch;
+    printf("ZEUS GPU: metal %u smmu mismatch n %u where %u: %x %x | %x %x | %x %x | %x %x | %x %x | %x %x | %x %x | %x %x | %x %x\n", round,
+           x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19]);
+  }
+  if (d.report[0] || d.report2[0]) printf("ZEUS GPU: metal %u plugin \"%.64s\" \"%.64s\"\n", round, d.report, d.report2);
 }
 void driverStart() {
   if (!zeus_gpu_sqe_size || !zeus_gpu_zap_mdt_size || !zeus_gpu_zap_b01_size) {printf("ZEUS GPU: stage 8 stop: GPU firmware not in this build\n"); return;}

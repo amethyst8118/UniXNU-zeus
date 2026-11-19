@@ -1,0 +1,100 @@
+diff --git a/ArmSmmu4KContext.c b/ArmSmmu4KContext.c
+index f3cbb22..15fc6bd 100644
+--- a/ArmSmmu4KContext.c
++++ b/ArmSmmu4KContext.c
+@@ -61,6 +61,10 @@ ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *c,
+     *out=v;
+     return ArmSmmu4KSuccess;
+ }
++/* zeus diagnostic (patches/armsmmu4k): why the last ArmSmmu4KStateMismatch was returned. [0] count, [1] where
++ * (1 global sCR0/ID0 check, 2 observed sCR0/ID0 differ from the attach-time ones, 3 an owned route changed, 4 context readback),
++ * then that check's values. */
++volatile uint32_t armsmmu4k_mismatch[20];
+ ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *c,
+     const ArmSmmu4KContextImage *observed)
+ {
+@@ -85,6 +89,20 @@ ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *c
+         expected.mair0!=observed->mair0 || expected.mair1!=observed->mair1 ||
+         ((expected.sctlr^observed->sctlr)&~asidpne_clear) || observed->reserved_zero ||
+         (!c->ttbr0_switched && expected.ttbr0!=observed->ttbr0) ||
+-        ((!c->ttbr0_switched || c->upper) && expected.ttbr1!=observed->ttbr1))return ArmSmmu4KStateMismatch;
++        ((!c->ttbr0_switched || c->upper) && expected.ttbr1!=observed->ttbr1)) {
++        /* zeus diagnostic: the expected and the read context image of the last mismatch (armsmmu4k_mismatch[0] 4 = readback). */
++        armsmmu4k_mismatch[1]=4;
++        armsmmu4k_mismatch[2]=expected.cbar;armsmmu4k_mismatch[3]=observed->cbar;
++        armsmmu4k_mismatch[4]=expected.cba2r;armsmmu4k_mismatch[5]=observed->cba2r;
++        armsmmu4k_mismatch[6]=expected.tcr;armsmmu4k_mismatch[7]=observed->tcr;
++        armsmmu4k_mismatch[8]=expected.tcr2;armsmmu4k_mismatch[9]=observed->tcr2;
++        armsmmu4k_mismatch[10]=expected.mair0;armsmmu4k_mismatch[11]=observed->mair0;
++        armsmmu4k_mismatch[12]=expected.mair1;armsmmu4k_mismatch[13]=observed->mair1;
++        armsmmu4k_mismatch[14]=expected.sctlr;armsmmu4k_mismatch[15]=observed->sctlr;
++        armsmmu4k_mismatch[16]=observed->reserved_zero;armsmmu4k_mismatch[17]=c->ttbr0_switched|(c->upper?2u:0u);
++        armsmmu4k_mismatch[18]=(uint32_t)expected.ttbr1;armsmmu4k_mismatch[19]=(uint32_t)observed->ttbr1;
++        armsmmu4k_mismatch[0]=armsmmu4k_mismatch[0]+1;
++        return ArmSmmu4KStateMismatch;
++    }
+     return ArmSmmu4KSuccess;
+ }
+diff --git a/ArmSmmu4KStreams.c b/ArmSmmu4KStreams.c
+index 4145ef2..23458ec 100644
+--- a/ArmSmmu4KStreams.c
++++ b/ArmSmmu4KStreams.c
+@@ -5,6 +5,7 @@ static int rd(const ArmSmmu4KIo *io,size_t at,uint32_t *v,ArmSmmu4KStreamResult
+ {++r->reads;return io->read32(io->cookie,at,v);}
+ static int wr(const ArmSmmu4KIo *io,size_t at,uint32_t v,ArmSmmu4KStreamResult *r)
+ {++r->writes;return io->write32(io->cookie,at,v);}
++extern volatile uint32_t armsmmu4k_mismatch[20];
+ static unsigned exids(uint32_t id){return (id>>8)&1;}
+ static uint32_t valid_smr(uint32_t id){return exids(id)?0:UINT32_C(1)<<31;}
+ static uint32_t valid_s2cr(uint32_t id){return exids(id)?1u<<10:0;}
+@@ -19,7 +20,10 @@ static ArmSmmu4KStatus global(const ArmSmmu4KIo *io,ArmSmmu4KStreamResult *r)
+      * policy (USFCFG). Configuration-access fault reporting (GCFGFRE/GCFGFIE) is not required: Linux sets
+      * it only in its own global reset, and firmware that owns sCR0 may leave it clear (an Adreno SMMU read
+      * 0x002f0406). It reports bad register accesses, it does not change translation or bypass. */
+-    if((r->scr0&0x407)!=0x406 || !!(r->scr0&8)!=exids(r->id0))return ArmSmmu4KStateMismatch;
++    if((r->scr0&0x407)!=0x406 || !!(r->scr0&8)!=exids(r->id0)) {
++        armsmmu4k_mismatch[1]=1;armsmmu4k_mismatch[2]=r->scr0;armsmmu4k_mismatch[3]=r->id0;armsmmu4k_mismatch[0]=armsmmu4k_mismatch[0]+1;
++        return ArmSmmu4KStateMismatch;
++    }
+     return r->global_fault?ArmSmmu4KFault:ArmSmmu4KSuccess;
+ }
+ static ArmSmmu4KStatus scan(const ArmSmmu4KIo *io,const ArmSmmu4KStream *s,unsigned n,
+@@ -39,7 +43,11 @@ static ArmSmmu4KStatus scan(const ArmSmmu4KIo *io,const ArmSmmu4KStream *s,unsig
+         if(own<n) {
+             unsigned live=valid(r->id0,smr,s2cr);
+             if(attached) {
+-                if(smr!=(valid_smr(r->id0)|s[own].sid) || s2cr!=(bank|valid_s2cr(r->id0)))return ArmSmmu4KStateMismatch;
++                if(smr!=(valid_smr(r->id0)|s[own].sid) || s2cr!=(bank|valid_s2cr(r->id0))) {
++                    armsmmu4k_mismatch[1]=3;armsmmu4k_mismatch[2]=slot;armsmmu4k_mismatch[3]=smr;armsmmu4k_mismatch[4]=s2cr;
++                    armsmmu4k_mismatch[5]=s[own].sid;armsmmu4k_mismatch[6]=bank;armsmmu4k_mismatch[0]=armsmmu4k_mismatch[0]+1;
++                    return ArmSmmu4KStateMismatch;
++                }
+             } else if((s2cr&~valid_s2cr(r->id0))!=FAULT ||
+                 (live && smr!=(valid_smr(r->id0)|s[own].sid)))return ArmSmmu4KBusy;
+             ++r->streams_verified;
+@@ -83,7 +91,11 @@ static ArmSmmu4KStatus observe(const ArmSmmu4KIo *io,const ArmSmmu4KStreamState
+     const ArmSmmu4KContextConfig *c,ArmSmmu4KStreamResult *r)
+ {
+     ArmSmmu4KStatus status=global(io,r);if(status)return status;
+-    if(r->id0!=s->id0 || r->scr0!=s->scr0)return ArmSmmu4KStateMismatch;
++    if(r->id0!=s->id0 || r->scr0!=s->scr0) {
++        armsmmu4k_mismatch[1]=2;armsmmu4k_mismatch[2]=r->scr0;armsmmu4k_mismatch[3]=s->scr0;armsmmu4k_mismatch[4]=r->id0;
++        armsmmu4k_mismatch[5]=s->id0;armsmmu4k_mismatch[0]=armsmmu4k_mismatch[0]+1;
++        return ArmSmmu4KStateMismatch;
++    }
+     status=ArmSmmu4KObserveOwnedContext(io,s->bank,c,&r->context);if(status)return status;
+     status=scan(io,s->streams,s->count,s->bank,1,r);if(status)return status;
+     return io->barrier(io->cookie)?ArmSmmu4KIoError:ArmSmmu4KSuccess;
+@@ -103,7 +115,11 @@ ArmSmmu4KStatus ArmSmmu4KObserveOwnedStreams(const ArmSmmu4KIo *io,const ArmSmmu
+     *r=(ArmSmmu4KStreamResult){0};r->must_retain_resources=1;
+     if(!s || !s->attached || s->poisoned || !s->count || s->count>8)return ArmSmmu4KArgument;
+     ArmSmmu4KStatus status=global(io,r);if(status)return status;
+-    if(r->id0!=s->id0 || r->scr0!=s->scr0)return ArmSmmu4KStateMismatch;
++    if(r->id0!=s->id0 || r->scr0!=s->scr0) {
++        armsmmu4k_mismatch[1]=2;armsmmu4k_mismatch[2]=r->scr0;armsmmu4k_mismatch[3]=s->scr0;armsmmu4k_mismatch[4]=r->id0;
++        armsmmu4k_mismatch[5]=s->id0;armsmmu4k_mismatch[0]=armsmmu4k_mismatch[0]+1;
++        return ArmSmmu4KStateMismatch;
++    }
+     status=ArmSmmu4KObserveOwnedContext(io,s->bank,c,&r->context);if(status)return status;
+     for(unsigned i=0;i<s->count;++i) {
+         uint32_t smr,s2cr;

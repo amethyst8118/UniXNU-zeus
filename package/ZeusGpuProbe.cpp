@@ -27,6 +27,7 @@
 #include <string.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOService.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSSharedPtr.h>

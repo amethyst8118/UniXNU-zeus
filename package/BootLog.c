@@ -892,7 +892,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   LOG_AT("display state");
   if (log_display_on && &native_legacy_state_words) {
-    static char words[900];
+    char words[900];   // on the stack: a 900-byte static in the kernel's __DATA hung boot-vsynctrace at the Apple logo (no room there)
     if (native_legacy_state_words(words, sizeof words)) {at = put(out, at, cap, "[display state]", 16); at = put(out, at, cap, words, sizeof words);}
   }
   if (log_display_on && &native_legacy_prepare_report) {

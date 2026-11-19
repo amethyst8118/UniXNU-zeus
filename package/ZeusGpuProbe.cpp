@@ -743,7 +743,16 @@ void driverStart() {
   const IOReturn context = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(smmu), kSize[W_SMMU], 0, 2, 0, 0, 1, 1, nullptr, &gContextReport);
   printf("ZEUS GPU: driver context %x step %u program %u attach %u spans %u mismatch %x\n", context, gContextReport.step, gContextReport.program_status,
          gContextReport.route_status, gContextReport.spans, gContextReport.mismatch);
-  if (context) return;
+  if (context) {
+    // Which attach phase refused (1 global/context/scan, 2 slot writes, 3 observe) and what the slots and bank 0 hold now.
+    printf("ZEUS GPU: driver route phase %u writes %u verified %u; program phase %u writes %u enabled %u\n", gContextReport.route_phase,
+           gContextReport.route_writes, gContextReport.routes_verified, gContextReport.program_phase, gContextReport.program_writes,
+           gContextReport.program_enabled);
+    for (unsigned slot = 0; slot < 4; ++slot)
+      printf("ZEUS GPU: driver slot %u smr %08x s2cr %08x\n", slot, rd32(smmu + 0x800 + 4 * slot), rd32(smmu + 0xc00 + 4 * slot));
+    printf("ZEUS GPU: driver bank 0 sctlr %08x cbar %08x fsr %08x scr0 %08x\n", rd32(cb), rd32(smmu + 0x1000 + 0x0), rd32(cb + 0x58), rd32(smmu));
+    return;
+  }
   for (uint32_t sid = 0; sid < 2; ++sid) wr32(smmu + 0x800 + 4 * sid, (1u << 31) | (0x400u << 16) | sid);   // zeus DT: mask 0x400 for both GPU streams
   wr32(cb + 0x4, 0x32b);
   wr32(cb + 0x618, 0);

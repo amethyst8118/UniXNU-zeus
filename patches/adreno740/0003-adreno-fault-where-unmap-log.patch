@@ -1,0 +1,119 @@
+diff --git a/NativeAdrenoSubmit.cpp b/NativeAdrenoSubmit.cpp
+index 273a402..4af6bd9 100644
+--- a/NativeAdrenoSubmit.cpp
++++ b/NativeAdrenoSubmit.cpp
+@@ -919,6 +919,35 @@ void NativeAdrenoSubmit::noteStall(uint32_t observed,const NativeAdrenoRingClock
+         log(stall_fence,3,pending,r0&0xffff,w0);
+     }
+ }
++/* zeus (patches/adreno740/0003): where a GPU translation fault's address lies, at the four newest snapshots that found a fault
++ * (native_adreno_fault_where_count & 3 is the next slot). [0] FAR; [1] the context bank's TTBR0 now, [2] the job VM's TTBR0, [3] that
++ * of the VM the submit path last switched the bank to (table mode 1); [4] the job VM's live handle at FAR (0: none); [5..7] the job
++ * VM's nearest mapping at or below FAR: base, bytes, handle; [8] entries of the unmap log (the last 256 unmaps, every VM) over FAR;
++ * [9..12] the newest such entry: address, bytes, handle | ASID << 48, time (us, VM clock); [13] the snapshot's time (VM clock);
++ * [14] the job's submission time (ring clock); [15] unmaps logged since boot. */
++extern "C" {volatile uint64_t native_adreno_fault_where[4][16];volatile uint32_t native_adreno_fault_where_count;
++    extern volatile uint64_t native_adreno_unmap_log[256][4];extern volatile uint32_t native_adreno_unmap_log_count;
++    extern uint64_t (*native_adreno_vm_now_us)(void);}
++static void noteFaultWhere(const NativeAdrenoVm *bank,const NativeAdrenoVm *space,const NativeAdrenoVm *table,uint64_t submit_us,
++    const uint32_t fault[4])
++{
++    const uint64_t far=(uint64_t)fault[2]<<32|fault[1];
++    uint64_t out[16]={};
++    out[0]=far;(void)bank->contextTtbr0(&out[1]);out[2]=space->ttbr0();out[3]=table?table->ttbr0():0;
++    out[4]=space->handleAt(far);
++    (void)space->mappingBelow(far,&out[5],&out[6],&out[7]);
++    const uint32_t logged=native_adreno_unmap_log_count,first=logged>256?logged-256:0;
++    for(uint32_t n=logged;n>first;--n) {
++        const volatile uint64_t *entry=native_adreno_unmap_log[(n-1)&255];
++        if(far<entry[0] || far-entry[0]>=entry[1])continue;
++        if(!out[8]) {out[9]=entry[0];out[10]=entry[1];out[11]=entry[2];out[12]=entry[3];}
++        ++out[8];
++    }
++    out[13]=native_adreno_vm_now_us?native_adreno_vm_now_us():0;out[14]=submit_us;out[15]=logged;
++    const uint32_t k=native_adreno_fault_where_count;
++    for(unsigned i=0;i<16;++i)native_adreno_fault_where[k&3][i]=out[i];
++    native_adreno_fault_where_count=k+1;
++}
+ /* The CP snapshot of a stalled fence (native_adreno_stall, _stall_mem, _stall_ring, and a stall log entry). */
+ void NativeAdrenoSubmit::snapshot(uint32_t next,uint32_t waited,uint64_t now,uint64_t pending,NativeAdrenoRing *stalled)
+ {
+@@ -947,6 +976,7 @@ void NativeAdrenoSubmit::snapshot(uint32_t next,uint32_t waited,uint64_t now,uin
+     if(job && job->word_count)findIb2(space,job->words,job->word_count,words[13]);
+     for(unsigned i=0;i<32;++i)native_adreno_stall_fault[i]=0;
+     if(job && job->word_count && fault[0] && !fault[2] && fault[1])findFault(space,job->words,job->word_count,fault[1]);
++    if(fault[0]&0x1fe)noteFaultWhere(vm_,space,table_vm_,job?job->submit_us:0,fault);   /* any fault bit (FSR 1..8) */
+     {
+         uint64_t brIb=(uint64_t)words[11]<<32|words[10],bvIb=(uint64_t)words[11]<<32|words[17];
+         if(!stalled->ibBefore(words[8],&ib,&size))brIb=ib;
+diff --git a/NativeAdrenoVm.cpp b/NativeAdrenoVm.cpp
+index e67fb99..3210cee 100644
+--- a/NativeAdrenoVm.cpp
++++ b/NativeAdrenoVm.cpp
+@@ -19,6 +19,10 @@ static bool importedUntouched(const NativeAdrenoMemory *memory) {return memory->
+ extern "C" {volatile uint64_t native_adreno_maint_kind[8][3];volatile uint64_t native_adreno_maint_walk[8];
+     volatile uint32_t native_adreno_sync_skips[2];volatile uint32_t native_adreno_sync_audit[6];volatile uint32_t native_adreno_maint_all=~0u;}
+ extern "C" boolean_t PE_parse_boot_argn(const char *,void *,int);
++/* zeus (patches/adreno740/0003): the last 256 unmaps of every VM: [0] GPU address, [1] bytes, [2] handle | ASID << 48, [3] time (us,
++ * native_adreno_vm_now_us). A GPU translation fault is looked up here (NativeAdrenoSubmit::snapshot): a fault inside a range unmapped
++ * after the faulting job was submitted means the job used a buffer it did not hold (jobs hold only their IB buffers). */
++extern "C" {volatile uint64_t native_adreno_unmap_log[256][4];volatile uint32_t native_adreno_unmap_log_count;}
+ /* Whether the kernel's cacheable physical aperture covers a page. It does not for memory outside the kernel's DRAM (pool BOs, the
+  * firmware framebuffer): no CPU cache line of such a page is the kernel's to compare or maintain, and only the board's uncached
+  * reader may read it. */
+@@ -488,6 +492,12 @@ IOReturn NativeAdrenoVm::unmap(uint64_t handle)
+         native_adreno_vm_kind_us[kind][1]=native_adreno_vm_kind_us[kind][1]+clock.elapsed();
+         native_adreno_vm_kind_us[kind][2]=native_adreno_vm_kind_us[kind][2]+spans;
+     }
++    {
++        const uint32_t n=__atomic_fetch_add(&native_adreno_unmap_log_count,1u,__ATOMIC_RELAXED);
++        volatile uint64_t *entry=native_adreno_unmap_log[n&255];
++        entry[0]=record->iova;entry[1]=record->memory->bytes();entry[2]=record->handle|(uint64_t)asid()<<48;
++        entry[3]=native_adreno_vm_now_us?native_adreno_vm_now_us():0;
++    }
+     index_.erase(record->handle);
+     const size_t slot=(size_t)(record-mappings_);if(slot<free_hint_)free_hint_=slot;
+     *record={};--objects_;
+@@ -831,6 +841,27 @@ uint64_t NativeAdrenoVm::handleAt(uint64_t iova) const
+     }
+     return 0;
+ }
++bool NativeAdrenoVm::mappingBelow(uint64_t iova,uint64_t *base,uint64_t *bytes,uint64_t *handle) const
++{
++    if(!base || !bytes || !handle || !attached_ || !mappings_)return false;
++    const Mapping *best=nullptr;
++    for(size_t i=0;i<high_;++i) {
++        const Mapping &m=mappings_[i];
++        if(m.memory && m.iova<=iova && (!best || m.iova>best->iova))best=&m;
++    }
++    if(!best)return false;
++    *base=best->iova;*bytes=best->memory->bytes();*handle=best->handle;return true;
++}
++IOReturn NativeAdrenoVm::contextTtbr0(uint64_t *out) const
++{
++    if(!out || !attached_)return kIOReturnBadArgument;
++    uint64_t offset=0;
++    for(const auto &region:regions_)if(region.state && region.state->context_offset)offset=region.state->context_offset;
++    if(!offset)return kIOReturnNotReady;
++    uint32_t lo=0,hi=0;
++    if(io_.read32(io_.cookie,(size_t)offset+0x20,&lo) || io_.read32(io_.cookie,(size_t)offset+0x24,&hi))return kIOReturnIOError;
++    *out=(uint64_t)hi<<32|lo;return kIOReturnSuccess;
++}
+ IOReturn NativeAdrenoVm::faultState(uint32_t out[4]) const
+ {
+     if(!out || !attached_ || poisoned_)return kIOReturnBadArgument;
+diff --git a/NativeAdrenoVm.h b/NativeAdrenoVm.h
+index 085fbfc..eeb3141 100644
+--- a/NativeAdrenoVm.h
++++ b/NativeAdrenoVm.h
+@@ -212,6 +212,10 @@ public:
+     /* Map handles count up and are never reused, so they order mappings in time: the next one, and the one over a GPU address (0: none). */
+     uint64_t nextHandle() const {return next_handle_;}
+     uint64_t handleAt(uint64_t iova) const;
++    /* zeus (patches/adreno740/0003): the mapping that starts nearest at or below a GPU address (false: none), and the context bank's
++     * TTBR0 as the hardware holds it now (the table the GPU was walking when it faulted). Diagnostics; read only. */
++    bool mappingBelow(uint64_t iova,uint64_t *base,uint64_t *bytes,uint64_t *handle) const;
++    IOReturn contextTtbr0(uint64_t *out) const;
+     /* Only a scheduler's actual successful GPU completion may call this.
+      * A timeout, interrupt bit alone or CPU-written timestamp is insufficient. */
+     IOReturn retireJobAfterCompletion(uint64_t handle);

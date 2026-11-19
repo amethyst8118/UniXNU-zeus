@@ -846,6 +846,27 @@ bool dramPage(uint64_t pa, uint32_t *out) {
   ml_io_unmap(page, 0x1000);
   return true;
 }
+// The driver's DRAM reader (native_adreno_dram_read32), after sheng's dramRead32 (GpuPowerProbe.cpp): one aligned word through an
+// uncached kernel mapping. zeus never installed it, so every hang snapshot read its job's command buffers as deadbeef ("read 77 ib1
+// 0 dwords, 77 unreadable", boot-poolclose) and the faulting address could not be found in them. The snapshot reads IBs a word at a
+// time, so the last page stays mapped: a sequential read maps each page once instead of once per word.
+IOLock *gDramReadLock;
+vm_offset_t gDramReadVa;
+uint64_t gDramReadPage = ~0ull;
+int dramRead32(uint64_t pa, uint32_t *value) {
+  if ((pa & 3) || !gDramReadLock) return 1;
+  const uint64_t page = pa & ~uint64_t(0xfff);
+  IOLockLock(gDramReadLock);
+  if (page != gDramReadPage) {
+    if (gDramReadVa) ml_io_unmap(gDramReadVa, 0x1000);
+    gDramReadVa = ml_io_map_unmappable(vm_offset_t(page), 0x1000, 0x7 /* VM_WIMG_IO */);
+    gDramReadPage = gDramReadVa ? page : ~0ull;
+  }
+  const bool ok = gDramReadVa != 0;
+  if (ok) *value = *reinterpret_cast<const volatile uint32_t *>(gDramReadVa + vm_offset_t(pa & 0xfff));
+  IOLockUnlock(gDramReadLock);
+  return ok ? 0 : 1;
+}
 bool gpuCopyPage(uint64_t src, uint64_t dst) {
   uint32_t words[8] = {};
   if (AdrenoPM4Type7(0x75, 5, &words[0]) != AdrenoPM4Success || AdrenoPM4Type7(0x12, 0, &words[6]) != AdrenoPM4Success) return false;
@@ -1124,6 +1145,9 @@ void driverStart() {
   NativeAdrenoVm *vm = NativeAdrenoGpuContextVm();
   const IOReturn submit = vm ? gSubmit.attach(vm, &gDriverRing) : kIOReturnNotReady;
   const IOReturn timer = gTimer.attach(&kTimerIo, NativeAdrenoTimeCp);
+  // sheng installs the DRAM reader before its coherence probe; zeus's probe has its own page reader, so order does not matter here.
+  if (!gDramReadLock) gDramReadLock = IOLockAlloc();
+  if (gDramReadLock) native_adreno_dram_read32 = dramRead32;
   if (!submit) coherenceProbe(vm);   // before any client, as sheng: decides how imported user memory is mapped
   // The restart hook before publication, as sheng: a hang then restarts the GPU and replays the other submissions.
   if (native_adreno_set_restart) native_adreno_set_restart(gpuRestart, nullptr);

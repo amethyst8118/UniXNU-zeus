@@ -182,6 +182,9 @@ extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_stall_find[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_hang __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_fault[32] __attribute__((weak_import));
+// patches/adreno740/0003: where each of the four newest faulting snapshots' address lies (NativeAdrenoSubmit.cpp, noteFaultWhere).
+extern volatile uint64_t native_adreno_fault_where[4][16] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_fault_where_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
@@ -2417,6 +2420,24 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       const volatile uint32_t *r = native_adreno_stall_ring;
       snprintf(row, sizeof row, "[gpu stall] ring fence=%u waited=%u on ring %u | cp runs %u flight %u | unfinished %u/%u | job %x | waited job %uus pending %uus",
                r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // Each faulting hang's address against the job VM's live mappings and the unmap log (patches/adreno740/0003), newest first:
+  // bank/job/table TTBR0 (bank != job: the GPU walked another process's table), live handle at FAR, the nearest mapping below FAR,
+  // and the newest unmap over FAR with how long before the snapshot it was (VM clock) and the job's submission time (ring clock).
+  if (log_gpu_on && &native_adreno_fault_where_count && native_adreno_fault_where_count) {
+    char row[360];
+    const uint32_t count = native_adreno_fault_where_count;
+    for (uint32_t i = 0; i < 4 && i < count; ++i) {
+      const volatile uint64_t *w = native_adreno_fault_where[(count - 1 - i) & 3];
+      snprintf(row, sizeof row, "[gpu fault where] #%u far %llx | ttbr bank %llx job %llx table %llx | live h%llu below %llx+%llx h%llu | "
+               "unmapped %llu: %llx+%llx h%llu a%llu %lldus before snap | snap %llu job %llu | unmaps %llu",
+               count - i, (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3],
+               (unsigned long long)w[4], (unsigned long long)w[5], (unsigned long long)w[6], (unsigned long long)w[7],
+               (unsigned long long)w[8], (unsigned long long)w[9], (unsigned long long)w[10], (unsigned long long)(w[11] & 0xffffffffffffull),
+               (unsigned long long)(w[11] >> 48), w[8] ? (long long)(w[13] - w[12]) : 0LL, (unsigned long long)w[13], (unsigned long long)w[14],
+               (unsigned long long)w[15]);
       at = put(out, at, cap, row, sizeof row);
     }
   }

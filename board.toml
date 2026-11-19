@@ -161,6 +161,9 @@ chip_id = "457"
 # 0x12e000000 (4.6875 GiB) stays below that tail. 4.5 GiB since 2026-11-17: with 2 GiB the desktop boot (153
 # processes, Data RAM disk in the window) ran down to 0x771 free pages and jetsam stalled. aston/sheng use 0x130000000.
 owned_memory_size = "0x120000000"
+# DarwinBoot lists free runs outside the window (/chosen/darwinboot-memory-outside) for the GPU pool (package/GpuMemoryPool.cpp,
+# which keeps only Android's System RAM outside the window: the high bank below 0x840000000 and 0x960000000..0x96ef00000).
+owned_memory_outside_ranges = 8
 packed_data_ramdisk = true
 persistent_data = true
 unique_chip_id = "required"

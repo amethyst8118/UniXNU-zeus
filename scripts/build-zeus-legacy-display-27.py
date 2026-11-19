@@ -406,6 +406,8 @@ compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
 compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 # Display controller timing (sheng DisplayTimingProbe): sheng_dpu_probe, dpu=<1..3>; [dpu] rows in BootLog with log-display=1.
 compile_cpp(ROOT / 'kits/sheng/DisplayTimingProbe.cpp', OUT / 'DisplayTimingProbe.o')
+# GPU memory pool outside the kernel's window (sheng GpuMemoryPool, zeus allow-list): sheng_gpu_pool_probe.
+compile_cpp(ROOT / 'kits/sheng/GpuMemoryPool.cpp', OUT / 'GpuMemoryPool.o')
 # zeus GPU power probe (sheng GpuPowerProbe, SM8450 facts): sheng_gpu_power_probe, staged by gpu-power=<n>, default off.
 gpu_includes = [x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4') for x in ('-I', str(ROOT / d))]
 compile_cpp(ROOT / 'kits/sheng/ZeusGpuProbe.cpp', OUT / 'ZeusGpuProbe.o', gpu_includes)
@@ -719,7 +721,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late, OUT / 'ZeusTouchProbe.o',
-     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'DisplayTimingProbe.o', OUT / 'ZeusGpuProbe.o', OUT / 'ZeusGpuFirmware.o', OUT / 'ZeusUsbProbe.o', OUT / 'ZeusUsbEth.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o', *usb_objects])
+     OUT / 'ZeusButtonProbe.o', OUT / 'CpuFreqProbe.o', OUT / 'DisplayTimingProbe.o', OUT / 'GpuMemoryPool.o', OUT / 'ZeusGpuProbe.o', OUT / 'ZeusGpuFirmware.o', OUT / 'ZeusUsbProbe.o', OUT / 'ZeusUsbEth.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o', *usb_objects])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source, touch_source]

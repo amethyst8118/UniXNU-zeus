@@ -500,6 +500,7 @@ extern void native_keystore_probe(void);
 extern void native_touch_probe(void);
 extern void sheng_cpufreq_probe(void);
 extern void sheng_gpu_power_probe(void);
+extern "C" void sheng_gpu_pool_probe(void) __attribute__((weak_import));   // GpuMemoryPool.cpp: GPU pool outside the window
 extern void sheng_wifi_probe(void);
 extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
 extern void sheng_usb_probe(void) __attribute__((weak_import));
@@ -515,6 +516,7 @@ void native_legacy_display_late_probe(void) {
     aston_boot_screen_probe();  // first: the boot screen takes the framebuffer until iOS draws (AstonBootScreen.cpp)
     native_keystore_probe();
     sheng_cpufreq_probe();
+    if (sheng_gpu_pool_probe) sheng_gpu_pool_probe();   // before the GPU driver takes its first buffer
     sheng_gpu_power_probe();
     native_touch_probe();
     sheng_wifi_probe();

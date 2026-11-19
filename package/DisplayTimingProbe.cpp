@@ -99,8 +99,7 @@ void dpuThread(void *, wait_result_t) {
             const uint32_t f0 = m[(kIntf[0] + kFrameCount) / 4];
             IOSleep(1000);
             native_dpu_autorefresh[4] = m[(kIntf[0] + kFrameCount) / 4] - f0;
-            IOLog("zeus-dpu: autorefresh i1 %#x -> %#x, i2 %#x -> %#x, interface 1 sent %u frames in 1 s
-", native_dpu_autorefresh[0],
+            IOLog("zeus-dpu: autorefresh i1 %#x -> %#x, i2 %#x -> %#x, interface 1 sent %u frames in 1 s\n", native_dpu_autorefresh[0],
                   native_dpu_autorefresh[1], native_dpu_autorefresh[2], native_dpu_autorefresh[3], native_dpu_autorefresh[4]);
             emap->release();
         }

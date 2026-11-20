@@ -57,7 +57,8 @@ def main():
             merged = plistlib.loads(cache.read_bytes())
             jobs = merged['LaunchDaemons']
             gone = [key for key, job in jobs.items() if job.get('Label') in drop]
-            if len(gone) != len(drop):
+            # A label may own more than one job (com.apple.CommCenter: CommCenter.plist and CommCenter-noncellular.plist); all go.
+            if {jobs[key].get('Label') for key in gone} != set(drop):
                 sys.exit('ZEUS_LAUNCHD_DROP: not every label is an OS job')
             for key in gone:
                 del jobs[key]

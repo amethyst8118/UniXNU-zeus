@@ -47,8 +47,12 @@ def main():
         report = bbr.merge_launchd_cache(os_cache, work / 'daemons', work / 'xpc/launchd.plist')
         # Test only: ZEUS_LAUNCHD_DROP=label[,label…] removes those OS jobs from the merged cache, to see whether launchd runs from this
         # cache at all (a dropped daemon that still runs means launchd uses another copy).
+        # boot-dropcam (2026-11-20) proved launchd runs from this cache (cameracaptured gone) while it still never exec'd the added job.
+        # ZEUS_LAUNCHD_REPLACE=label runs /usr/libexec/adrenoprobed in place of that OS job's program (the job keeps its other keys), so
+        # the daemon starts the way launchd already starts that job.
         drop = [label for label in os.environ.get('ZEUS_LAUNCHD_DROP', '').split(',') if label]
-        if drop:
+        replace = os.environ.get('ZEUS_LAUNCHD_REPLACE', '')
+        if drop or replace:
             cache = work / 'xpc/launchd.plist'
             merged = plistlib.loads(cache.read_bytes())
             jobs = merged['LaunchDaemons']
@@ -57,9 +61,15 @@ def main():
                 sys.exit('ZEUS_LAUNCHD_DROP: not every label is an OS job')
             for key in gone:
                 del jobs[key]
+            if replace:
+                hosts = [job for job in jobs.values() if job.get('Label') == replace]
+                if len(hosts) != 1:
+                    sys.exit('ZEUS_LAUNCHD_REPLACE: no single OS job ' + replace)
+                hosts[0].pop('Program', None)
+                hosts[0]['ProgramArguments'] = ['/usr/libexec/adrenoprobed']
             cache.write_bytes(plistlib.dumps(merged, fmt=plistlib.FMT_XML, sort_keys=False))
             subprocess.run(['plutil', '-convert', 'binary1', str(cache)], check=True)
-            print('launchd cache: dropped', gone)
+            print('launchd cache: dropped', gone, 'replaced', replace or '-')
         report.update(bbr.sign_launchd_cache(work / 'xpc/launchd.plist'))
         (work / 'libexec').mkdir()
         shutil.copy2(plugin / 'adrenoprobed', work / 'libexec/adrenoprobed')

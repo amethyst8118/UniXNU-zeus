@@ -197,8 +197,8 @@
       "original": "0xfffffff00ab63e70",
       "original_size": 12,
       "original_sha256": "6093fdd3d959ebd2e704ba0b530470ceee27b3b2f81d673ccc8cdddeed17b8da",
-      "native_symbol": "_proc_pgrpid",
-      "evidence": "`bti; ldr w0, [x0, #0x24]; ret`. The only unpaired native function with this body is proc_pgrpid; call-sequence alignment of the AMFI caller with 24A446 also names proc_pgrpid."
+      "native_symbol": "_csblob_get_signer_type",
+      "evidence": "`bti; ldr w0, [x0, #0x24]; ret` placed between csblob_get_cdhash (0x...3e64) and csblob_get_validation_category (0x...3f10), the order of bsd/kern/kern_cs.c (native csblob_get_cdhash, csblob_get_signer_type, ..., csblob_get_validation_category); native csblob_get_signer_type has the same body. Was bound to proc_pgrpid (same body, so behaviour was unchanged); corrected 2026-11-21."
     },
     {
       "original": "0xfffffff00ab63f7c",
@@ -232,8 +232,8 @@
       "original": "0xfffffff00aba4a88",
       "original_size": 12,
       "original_sha256": "6093fdd3d959ebd2e704ba0b530470ceee27b3b2f81d673ccc8cdddeed17b8da",
-      "native_symbol": "_csblob_get_signer_type",
-      "evidence": "Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 4 aligned call(s) name _csblob_get_signer_type."
+      "native_symbol": "_proc_pgrpid",
+      "evidence": "`bti; ldr w0, [x0, #0x24]; ret` among the proc_* accessors (0x...ab9b/aba region, bsd/kern/kern_proc.c), called by sandbox; native proc_pgrpid has the same body. The call-sequence alignment had named it csblob_get_signer_type (same body); corrected 2026-11-21 with 0x...3e70 = csblob_get_signer_type by placement."
     },
     {
       "original": "0xfffffff00aba525c",

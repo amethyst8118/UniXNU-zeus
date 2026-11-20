@@ -3,7 +3,386 @@
     "kernelcache_sha256": "2276364d028954a1152e721820f243f9400ce5d4b13c6d57f021f010afd1eabf",
     "entry": "com.apple.kernel"
   },
-  "functions": [],
+  "functions": [
+    {
+      "original": "0xfffffff00a68b63c",
+      "original_size": 100,
+      "original_sha256": "60116ebce59ab0cdeed5ae8f10bd845d51e32315c08d7895d39e3d9957dee2ad",
+      "native_symbol": "_kdp_register_callout",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _kdp_register_callout (carried 2026-11-21); callers: AppleARMPlatform."
+    },
+    {
+      "original": "0xfffffff00a6c54d8",
+      "original_size": 80,
+      "original_sha256": "4953671de200f82de835c87b7dd4b0fc07dcf2eed5336abb856ca5053ebd3983",
+      "native_symbol": "_zfree",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _zfree (carried 2026-11-21); callers: AppleMobileFileIntegrity, IOSurface."
+    },
+    {
+      "original": "0xfffffff00a6d1b40",
+      "original_size": 312,
+      "original_sha256": "a0de36427a07ab93b7b4c72951ff19a2d5a50a99545f6da4fe49235f7f10ec11",
+      "native_symbol": "_lck_rw_gate_destroy",
+      "evidence": "Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 2 aligned call(s) name _lck_rw_gate_destroy."
+    },
+    {
+      "original": "0xfffffff00a6d2f60",
+      "original_size": 56,
+      "original_sha256": "f3ac36c4afc2132c72e04012f6911fba17e5db4c5faa10893e16d8dc8179deb4",
+      "native_symbol": "_lck_mtx_gate_alloc_init",
+      "evidence": "Call-sequence alignment of its AppleImage4 callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _lck_mtx_gate_alloc_init."
+    },
+    {
+      "original": "0xfffffff00a6d322c",
+      "original_size": 308,
+      "original_sha256": "22a08a523cc6348ce6e5ac687039a3327c2cee7b2b775768211ea9f2c4826239",
+      "native_symbol": "_lck_mtx_gate_try_close",
+      "evidence": "Call-sequence alignment of its AppleImage4 callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _lck_mtx_gate_try_close."
+    },
+    {
+      "original": "0xfffffff00a6d3360",
+      "original_size": 284,
+      "original_sha256": "452722724630d0f2033c4c15e3b4fb9038650b2e8bf962af287ed3cf5d9ab61f",
+      "native_symbol": "_lck_mtx_gate_close",
+      "evidence": "Call-sequence alignment of its AppleImage4 callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _lck_mtx_gate_close."
+    },
+    {
+      "original": "0xfffffff00a6d347c",
+      "original_size": 12,
+      "original_sha256": "9402b1c87437c50432f104a3340aa803d3e6e8d7974a146ede566f10e306266c",
+      "native_symbol": "_lck_mtx_gate_open",
+      "evidence": "identical bytes to a reviewed function bound to _lck_mtx_gate_open (carried 2026-11-21); callers: AppleImage4. Call-sequence alignment of its AppleImage4 callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 2 aligned call(s) name _lck_mtx_gate_open."
+    },
+    {
+      "original": "0xfffffff00a6d3498",
+      "original_size": 12,
+      "original_sha256": "58da13a6911110ea740bff1c5aba0abdd70ee92c705568c03685d35cbacf8c18",
+      "native_symbol": "_lck_mtx_gate_steal",
+      "evidence": "identical bytes to a reviewed function bound to _lck_mtx_gate_steal (carried 2026-11-21); callers: AppleImage4. Call-sequence alignment of its AppleImage4 callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _lck_mtx_gate_steal."
+    },
+    {
+      "original": "0xfffffff00a6f83f4",
+      "original_size": 80,
+      "original_sha256": "c2e5c486bfdcb340b958e63a80ae75ba87878fc22b0eb7f8c671cfe48f2ddfa3",
+      "native_symbol": "_smr_leave",
+      "evidence": "Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _smr_leave."
+    },
+    {
+      "original": "0xfffffff00a712330",
+      "original_size": 68,
+      "original_sha256": "1f20441a44f0fe7e99f8e8bf3d81b22574b888211dde7ecfab0f722b579cec0d",
+      "native_symbol": "_task_deallocate",
+      "evidence": "Call-sequence alignment of its IOSurface,IOGPUFamily,IOHIDFamily,IOReportFamily,CoreAnalyticsFamily callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 6 aligned call(s) name _task_deallocate."
+    },
+    {
+      "original": "0xfffffff00a71783c",
+      "original_size": 84,
+      "original_sha256": "4a90db44824ea3e99962fadebe998ed32f1d8f336ac71e8ff9efaa98a8e4fdf5",
+      "native_symbol": "_thread_set_allocation_name",
+      "evidence": "identical bytes to a reviewed function bound to _thread_set_allocation_name (carried 2026-11-21); callers: IOGPUFamily."
+    },
+    {
+      "original": "0xfffffff00a737fd8",
+      "original_size": 80,
+      "original_sha256": "6e79c2a86b381f9b537f8ed286168ea307ab2b085320f8a1cd34e280fd8b8bc3",
+      "native_symbol": "_zfree",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _zfree (carried 2026-11-21); callers: apfs. Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 16 aligned call(s) name _zfree."
+    },
+    {
+      "original": "0xfffffff00a738be0",
+      "original_size": 128,
+      "original_sha256": "f5c6474152312f63da8f4ec0cefec70280c755ef96b65600f8131be641128b5d",
+      "native_symbol": "_zone_require_ro",
+      "evidence": "Call-sequence alignment of its AppleMobileFileIntegrity,sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 6 aligned call(s) name _zone_require_ro."
+    },
+    {
+      "original": "0xfffffff00a77db50",
+      "original_size": 140,
+      "original_sha256": "a6fc7a2636651a14e9b9cb7283ae7e4e17e40192ba26cd490e37209e4f617a75",
+      "native_symbol": "_vm_kernel_addrhide",
+      "evidence": "Call-sequence alignment of its IOSurface,IOGPUFamily callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 39 aligned call(s) name _vm_kernel_addrhide."
+    },
+    {
+      "original": "0xfffffff00a8296b4",
+      "original_size": 72,
+      "original_sha256": "9c7f421f7221577e9fbb516e842575d64435f08b57ee8ba06bce90948a81da24",
+      "native_symbol": "_ml_stack_remaining",
+      "evidence": "identical bytes to a reviewed function bound to _ml_stack_remaining (carried 2026-11-21); callers: IOCryptoAcceleratorFamily."
+    },
+    {
+      "original": "0xfffffff00a829bac",
+      "original_size": 60,
+      "original_sha256": "b2abba24172aa23b5c8b4a6573d9aa3f23a7a0a65a3328d891d0ff84d882bac8",
+      "native_symbol": "_ml_cpu_signal",
+      "evidence": "identical bytes to a reviewed function bound to _ml_cpu_signal (carried 2026-11-21); callers: AppleARMPlatform."
+    },
+    {
+      "original": "0xfffffff00a866ec8",
+      "original_size": 120,
+      "original_sha256": "771b957e12b31f01c86f56241d7462e1800cdb50913f5b868bbc0e05c5894819",
+      "native_symbol": "_cluster_max_io_size",
+      "evidence": "identical bytes to a reviewed function bound to _cluster_max_io_size (carried 2026-11-21); callers: apfs. Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _cluster_max_io_size."
+    },
+    {
+      "original": "0xfffffff00a8ae574",
+      "original_size": 88,
+      "original_sha256": "7e70bc3ac3e012addf6df16735f01ef670a8215612b284389ca1e4fd0c55e235",
+      "native_symbol": "_vfs_vnodecovered_noblock",
+      "evidence": "Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _vfs_vnodecovered_noblock."
+    },
+    {
+      "original": "0xfffffff00a8b0408",
+      "original_size": 196,
+      "original_sha256": "55fec8b9f028e85df39081d58cddc43c4591168961efa6bd57870240be9aba6b",
+      "native_symbol": "_vnode_setmountedon",
+      "evidence": "Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _vnode_setmountedon."
+    },
+    {
+      "original": "0xfffffff00a8b04cc",
+      "original_size": 196,
+      "original_sha256": "1265722a112524d7ab9e87d983381dc3b3c62e175911cbc41c0ca6c072f1928e",
+      "native_symbol": "_vnode_clearmountedon",
+      "evidence": "Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _vnode_clearmountedon."
+    },
+    {
+      "original": "0xfffffff00a8c8d40",
+      "original_size": 84,
+      "original_sha256": "a2cc392af0e8a1ca95526f521982986739b5580fe3aa81bc789cdd7905a81a8f",
+      "native_symbol": "_decmpfs_cnode_free",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _decmpfs_cnode_free (carried 2026-11-21); callers: apfs. Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 2 aligned call(s) name _decmpfs_cnode_free."
+    },
+    {
+      "original": "0xfffffff00ab63f7c",
+      "original_size": 44,
+      "original_sha256": "f7c1820038aa5796edc09fd6eb392ed1a7663f7b99aeefaecf15908b0519fb3f",
+      "native_symbol": "_csblob_get_trust_level",
+      "evidence": "identical bytes to a reviewed function bound to _csblob_get_trust_level (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _csblob_get_trust_level."
+    },
+    {
+      "original": "0xfffffff00ab9ecb4",
+      "original_size": 76,
+      "original_sha256": "25a68a48ad38015869786aff38bb1fbafb069e9bceccc5c156fddc5ec5dc168c",
+      "native_symbol": "_proc_getexecutablevnode",
+      "evidence": "Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _proc_getexecutablevnode."
+    },
+    {
+      "original": "0xfffffff00ab9ed00",
+      "original_size": 76,
+      "original_sha256": "0ba4931385884ca834b980bd0ef4078c56bbe269e87ad489889fa5148d57a6ad",
+      "native_symbol": "_proc_getexecutablevnode_noblock",
+      "evidence": "Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 3 aligned call(s) name _proc_getexecutablevnode_noblock."
+    },
+    {
+      "original": "0xfffffff00aba4a88",
+      "original_size": 12,
+      "original_sha256": "6093fdd3d959ebd2e704ba0b530470ceee27b3b2f81d673ccc8cdddeed17b8da",
+      "native_symbol": "_csblob_get_signer_type",
+      "evidence": "Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 4 aligned call(s) name _csblob_get_signer_type."
+    },
+    {
+      "original": "0xfffffff00aba525c",
+      "original_size": 248,
+      "original_sha256": "27f82abb7a3eb09e19e76fb34bb8340ebfe73e406e6a0ba18b4860ee6fa711c4",
+      "native_symbol": "_proc_get_syscall_filter_mask",
+      "evidence": "Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 3 aligned call(s) name _proc_get_syscall_filter_mask."
+    },
+    {
+      "original": "0xfffffff00abbd670",
+      "original_size": 128,
+      "original_sha256": "6a60420abb167cd0490c14ac86d48fd70d4112284df11dde1489d7b4921c0078",
+      "native_symbol": "_sysctl_handle_opaque",
+      "evidence": "(oidp, arg1, arg2, req): calls req->oldfunc (+0x28) with (req, arg1, arg2) and, when req->newptr (+0x30) is set, tail-calls req->newfunc (+0x48): bsd/kern/kern_sysctl.c sysctl_handle_opaque (SYSCTL_OUT then SYSCTL_IN). A single alignment vote for IOSleep was rejected (IOSleep calls delay_for_interval). identical bytes to a reviewed function bound to _sysctl_handle_opaque (carried 2026-11-21); callers: AppleImage4."
+    },
+    {
+      "original": "0xfffffff00abd4e20",
+      "original_size": 16,
+      "original_sha256": "93e2981462c2821d47fbfaff18e8793719c582e5b2f73601bf22ba9476eddf88",
+      "native_symbol": "_mbuf_data",
+      "evidence": "identical bytes to a reviewed function bound to _mbuf_data (carried 2026-11-21); callers: AppleUSBDeviceMux. Call-sequence alignment of its AppleUSBDeviceMux callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 19 aligned call(s) name _mbuf_data."
+    },
+    {
+      "original": "0xfffffff00abd4ec0",
+      "original_size": 48,
+      "original_sha256": "5487a428059967eb73ab77fef42a7d891f13c33f388e803d39e313fe761c2ecb",
+      "native_symbol": "_mbuf_datastart",
+      "evidence": "identical bytes to a reviewed function bound to _mbuf_datastart (carried 2026-11-21); callers: AppleUSBDeviceMux. Call-sequence alignment of its AppleUSBDeviceMux callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 7 aligned call(s) name _mbuf_datastart."
+    },
+    {
+      "original": "0xfffffff00abd4ef0",
+      "original_size": 104,
+      "original_sha256": "285c9b9309942b3c4735e49887e8763b8621a032c6359ba78ac586e4dcb03b86",
+      "native_symbol": "_mbuf_setdata",
+      "evidence": "identical bytes to a reviewed function bound to _mbuf_setdata (carried 2026-11-21); callers: AppleUSBDeviceMux. Call-sequence alignment of its AppleUSBDeviceMux callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 6 aligned call(s) name _mbuf_setdata."
+    },
+    {
+      "original": "0xfffffff00abd9340",
+      "original_size": 128,
+      "original_sha256": "5982917a42503e189e146941b6f3da6fca8c5ae602d5f34ebebeaecaeb2727bb",
+      "native_symbol": "_check_trust_cache_runtime_for_uuid",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _check_trust_cache_runtime_for_uuid (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _check_trust_cache_runtime_for_uuid."
+    },
+    {
+      "original": "0xfffffff00abd9bd0",
+      "original_size": 168,
+      "original_sha256": "7f13fe0b46e2568194d66e6832af3469d37b7b43d927a045f2aeb4a25abac048",
+      "native_symbol": "_query_trust_cache",
+      "evidence": "(query_type, cdhash, token): a NULL cdhash returns 4 (KERN_INVALID_ARGUMENT); otherwise builds a query and calls the trust-cache lookup, copying a 16-byte token out when token is non-NULL. bsd/kern/kern_trustcache.c query_trust_cache; native _query_trust_cache was unpaired. AMFI 24A446 calls the renamed iOS 27 query_trust_cache_with_length at the aligned site."
+    },
+    {
+      "original": "0xfffffff00abda428",
+      "original_size": 80,
+      "original_sha256": "2e43b71a2a76de13feea09821eb29df1626d374bb00bbaa4a850eed3cccd4ff7",
+      "native_symbol": "_enable_developer_mode",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _enable_developer_mode (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _enable_developer_mode."
+    },
+    {
+      "original": "0xfffffff00abda478",
+      "original_size": 80,
+      "original_sha256": "a02058c1db3a9516c4473db491402b62cb533ea1cbd1d024432133d994a7407f",
+      "native_symbol": "_disable_developer_mode",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _disable_developer_mode (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _disable_developer_mode."
+    },
+    {
+      "original": "0xfffffff00abda4e4",
+      "original_size": 68,
+      "original_sha256": "2c1c0b6eb601a3ddea26b3e121a61b209ed4c95cc46bdf4269a978d47bd94b40",
+      "native_symbol": "_research_mode_state",
+      "evidence": "Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _research_mode_state."
+    },
+    {
+      "original": "0xfffffff00abda528",
+      "original_size": 68,
+      "original_sha256": "0bd1b6150b57c80ec2a94b39712888eeac75640511c902a60ebf81771cce5d4c",
+      "native_symbol": "_extended_research_mode_state",
+      "evidence": "Call-sequence alignment of its AppleMobileFileIntegrity,sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 3 aligned call(s) name _extended_research_mode_state."
+    },
+    {
+      "original": "0xfffffff00abda56c",
+      "original_size": 64,
+      "original_sha256": "b0b150f55dfe558263b174986c277f6ee3c8f36ff32d4d8bf4f7ff69e18a76b9",
+      "native_symbol": "_restricted_execution_mode_enable",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _restricted_execution_mode_enable (carried 2026-11-21); callers: AppleMobileFileIntegrity."
+    },
+    {
+      "original": "0xfffffff00abda5ac",
+      "original_size": 44,
+      "original_sha256": "955c1cba2f54834bdfd19acedbdf636cc3b5d94c6ed952562813faafc7449401",
+      "native_symbol": "_restricted_execution_mode_state",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _restricted_execution_mode_state (carried 2026-11-21); callers: AppleMobileFileIntegrity, sandbox. Call-sequence alignment of its AppleMobileFileIntegrity,sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 7 aligned call(s) name _restricted_execution_mode_state."
+    },
+    {
+      "original": "0xfffffff00abda5d8",
+      "original_size": 72,
+      "original_sha256": "16c64e4769bee59f886baa9ea5e2bcdc652cc7966aa2d843f2bd9d627ed17452",
+      "native_symbol": "_update_csm_device_state",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _update_csm_device_state (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _update_csm_device_state."
+    },
+    {
+      "original": "0xfffffff00abda620",
+      "original_size": 100,
+      "original_sha256": "fcfec0e14e6c8f2820979dba7e85573c7599366921c08fd0ab7046a54c2f395d",
+      "native_symbol": "_complete_security_boot_mode",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _complete_security_boot_mode (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _complete_security_boot_mode."
+    },
+    {
+      "original": "0xfffffff00abda684",
+      "original_size": 8,
+      "original_sha256": "224d4df0836ae187285a713f6eab38d506f106d5205135a58ab1548d5684fce9",
+      "native_symbol": "_garbage_collect_provisioning_profiles",
+      "evidence": "identical bytes to a reviewed function bound to _garbage_collect_provisioning_profiles (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _garbage_collect_provisioning_profiles."
+    },
+    {
+      "original": "0xfffffff00abdad48",
+      "original_size": 76,
+      "original_sha256": "fa00faf76231f24e65f987f74cfdb61eaf7c0750f2c8d251d725fad6d4e8112e",
+      "native_symbol": "_set_local_signing_public_key",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _set_local_signing_public_key (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 4 aligned call(s) name _set_local_signing_public_key."
+    },
+    {
+      "original": "0xfffffff00abdad94",
+      "original_size": 84,
+      "original_sha256": "b636583b4f3eeb4d5bd7af202ff67d55290e7fd2f59d12cda7146cc7ce73792c",
+      "native_symbol": "_get_local_signing_public_key",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _get_local_signing_public_key (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 3 aligned call(s) name _get_local_signing_public_key."
+    },
+    {
+      "original": "0xfffffff00abdae34",
+      "original_size": 252,
+      "original_sha256": "b5f84bd1b41d1955e003ab0b114186be8b6c5300acc261acb09befc571db2e2d",
+      "native_symbol": "_csm_resolve_os_entitlements_from_proc",
+      "evidence": "Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _csm_resolve_os_entitlements_from_proc."
+    },
+    {
+      "original": "0xfffffff00abfb9ec",
+      "original_size": 152,
+      "original_sha256": "1ddf4d1298829b6fde97e7a49267418a35d611cb117d4a848229894b54de7038",
+      "native_symbol": "_csblob_register_profile",
+      "evidence": "Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _csblob_register_profile."
+    },
+    {
+      "original": "0xfffffff00ac3911c",
+      "original_size": 304,
+      "original_sha256": "3c236c77c36aaf2f63a96d0aa741060dc84dee90052a160f4239f4f70ef1fa16",
+      "native_symbol": "_sock_getsockname",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _sock_getsockname (carried 2026-11-21); callers: AppleUSBDeviceMux, sandbox. Call-sequence alignment of its AppleUSBDeviceMux,sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _sock_getsockname."
+    },
+    {
+      "original": "0xfffffff00ae203e8",
+      "original_size": 400,
+      "original_sha256": "a440d56c8a3cc925e4d8f0d0a04c543be612bf3c1c343e66273a1ec013d53e57",
+      "native_symbol": "_IOCircularDataQueueEnqueue",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _IOCircularDataQueueEnqueue (carried 2026-11-21); callers: IOHIDFamily."
+    },
+    {
+      "original": "0xfffffff00ae82954",
+      "original_size": 36,
+      "original_sha256": "8e7e96f8773eb8dba497961aa08961fbef76c4182045be8dad084a63decc5275",
+      "native_symbol": "_PE_parse_boot_argn",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _PE_parse_boot_argn (carried 2026-11-21); callers: AppleARMPlatform, AppleARMWatchdogTimer, AppleEffaceableStorage, AppleIISController, AppleM2ScalerCSCDriver, AppleMobileFileIntegrity, ApplePMGR, AppleUSBXDCI, IODARTFamily, AppleUSBCommon, AppleUSBXHCI, apfs, CoreAnalyticsFamily, IOAVFamily, IOAccessoryManager, IOCryptoAcceleratorFamily, IOGPUFamily, IOHDCPFamily, IOHIDFamily, IOMobileGraphicsFamily, IOPCIFamily, IOSCSIArchitectureModelFamily, IOSCSIBlockCommandsDevice, IOSlowAdaptiveClockingFamily, IOStorageFamily, IOSurface, IOUSBDeviceFamily, IOUSBHostFamily, IOUSBMassStorageDriver, corecrypto, AppleImage4, sandbox. Call-sequence alignment of its IOSurface,IOHIDFamily,AppleUSBCommon,AppleUSBXDCI,IOUSBHostFamily,IOSCSIArchitectureModelFamily,AppleARMWatchdogTimer,IOGPUFamily,IODARTFamily,IOAccessoryManager,AppleUSBXHCI,IOUSBDeviceFamily,sandbox,corecrypto,AppleEffaceableStorage,IOHDCPFamily,IOSCSIBlockCommandsDevice,IOUSBMassStorageDriver,IOMobileGraphicsFamily,apfs,AppleImage4,IOSlowAdaptiveClockingFamily,IOStorageFamily,AppleMobileFileIntegrity,IOPCIFamily,IOAVFamily,AppleARMPlatform,AppleIISController,ApplePMGR,AppleM2ScalerCSCDriver,IOCryptoAcceleratorFamily,CoreAnalyticsFamily callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 391 aligned call(s) name _PE_parse_boot_argn."
+    },
+    {
+      "original": "0xfffffff00ae8307c",
+      "original_size": 36,
+      "original_sha256": "ac2b315ba6d3f0b2c54d6054270c9c0b7d636d91e4fa87f8c62b11e72f7491d5",
+      "native_symbol": "_PE_parse_boot_arg_str",
+      "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _PE_parse_boot_arg_str (carried 2026-11-21); callers: sandbox. Call-sequence alignment of its sandbox callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _PE_parse_boot_arg_str."
+    },
+    {
+      "original": "0xfffffff00ae84f1c",
+      "original_size": 400,
+      "original_sha256": "a105423e0d6819977522d515a7bacce98be815cf3fc2d766d80d498a5fbe8a0d",
+      "native_symbol": "_kprintf",
+      "evidence": "Variadic: saves the caller address, tests two console-disable flag bytes, then hw_lock_try, interrupts off, __doprnt, hw_lock_unlock and os_log_with_args (paired callees). pexpert/arm/pe_kprintf.c kprintf (disable_serial_output / disable_kprintf_output). 798 call sites in 13 kexts. Call-sequence alignment of its AppleARMWatchdogTimer,IOSurface,IOGPUFamily,IODARTFamily,IOPCIFamily,corecrypto,AppleARMPlatform,ApplePMGR,IOSerialFamily,IOCryptoAcceleratorFamily,IOSlowAdaptiveClockingFamily,IOSCSIArchitectureModelFamily,AppleEffaceableStorage callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 689 aligned call(s) name _kprintf."
+    },
+    {
+      "original": "0xfffffff00aebacf0",
+      "original_size": 164,
+      "original_sha256": "e1a3cd64f032d54cd01bcde279ddd2e2c76e13991c36cf9e2e8f2eaf7d665217",
+      "native_symbol": "_panic_with_options",
+      "evidence": "Call-sequence alignment of its AppleARMWatchdogTimer callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 3 aligned call(s) name _panic_with_options."
+    },
+    {
+      "original": "0xfffffff00aec8114",
+      "original_size": 56,
+      "original_sha256": "675ea2eeafc24e708101473a0fb448370189c4d019bce86396235d2052f04d15",
+      "native_symbol": "_pmap_claim_reserved_ppl_page",
+      "evidence": "Call-sequence alignment of its corecrypto callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _pmap_claim_reserved_ppl_page."
+    },
+    {
+      "original": "0xfffffff00aec814c",
+      "original_size": 56,
+      "original_sha256": "649ea78a3f98a467ad6d312d480f83d43dcadd69affc4f5bf52c725a55e52613",
+      "native_symbol": "_pmap_free_reserved_ppl_page",
+      "evidence": "Call-sequence alignment of its corecrypto callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _pmap_free_reserved_ppl_page."
+    },
+    {
+      "original": "0xfffffff00aec98b8",
+      "original_size": 16,
+      "original_sha256": "270e3f8691f72932d5b54c15ba75782fa0a900b4afe6ad4133552961da730434",
+      "native_symbol": "_xnu_image4_storage_data",
+      "evidence": "identical bytes to a reviewed function bound to _xnu_image4_storage_data (carried 2026-11-21); callers: AppleImage4."
+    }
+  ],
   "data": [
     {
       "original": "0xfffffff00b1ad070",

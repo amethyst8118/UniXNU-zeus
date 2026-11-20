@@ -122,8 +122,10 @@ extern volatile int native_gpu_addon_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon_status __attribute__((weak_import));
 extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int zeus_launchd_cache_stage __attribute__((weak_import));
-extern volatile uint32_t zeus_exec_trace[6] __attribute__((weak_import));   // patches/xnu-12377/zeus-exec-trace.patch
-extern volatile uint32_t zeus_exit_trace[4] __attribute__((weak_import));   // patches/xnu-12377/zeus-exit-trace.patch
+// patches/xnu-12377/zeus-exec-trace.patch and zeus-exit-trace.patch (zeus-ios27 only). One declaration per line, nothing after
+// it: build-sheng-source-storage.py gives only such lines a weak default.
+extern volatile uint32_t zeus_exec_trace[6] __attribute__((weak_import));
+extern volatile uint32_t zeus_exit_trace[4] __attribute__((weak_import));
 extern volatile int zeus_launchd_cache_status __attribute__((weak_import));
 extern volatile int zeus_libexec_stage __attribute__((weak_import));
 extern volatile int zeus_libexec_status __attribute__((weak_import));
@@ -374,8 +376,9 @@ extern uint32_t native_gpu_perf_vote[2] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs[15] __attribute__((weak_import));
 extern unsigned armcpu_stats_row(unsigned index, char *row, unsigned size) __attribute__((weak_import));
 extern volatile uint32_t sheng_edge_cross_type_steals[2] __attribute__((weak_import)), sheng_edge_idle_beside_excess[2] __attribute__((weak_import));
-extern uint64_t cs_native4k_read_ticks __attribute__((weak_import)), cs_native4k_hash_ticks __attribute__((weak_import)),
-  cs_native4k_bytes __attribute__((weak_import));
+extern uint64_t cs_native4k_read_ticks __attribute__((weak_import));
+extern uint64_t cs_native4k_hash_ticks __attribute__((weak_import));
+extern uint64_t cs_native4k_bytes __attribute__((weak_import));
 extern unsigned long cs_native4k_ready_blobs __attribute__((weak_import));
 extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_native4k_digest_cpu[2] __attribute__((weak_import)),
   cs_native4k_digest_bytes[2] __attribute__((weak_import)), cs_native4k_chunk_ticks __attribute__((weak_import)),

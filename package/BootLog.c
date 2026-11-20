@@ -123,6 +123,7 @@ extern volatile int native_gpu_addon_status __attribute__((weak_import));
 extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int zeus_launchd_cache_stage __attribute__((weak_import));
 extern volatile uint32_t zeus_exec_trace[6] __attribute__((weak_import));   // patches/xnu-12377/zeus-exec-trace.patch
+extern volatile uint32_t zeus_exit_trace[4] __attribute__((weak_import));   // patches/xnu-12377/zeus-exit-trace.patch
 extern volatile int zeus_launchd_cache_status __attribute__((weak_import));
 extern volatile int zeus_libexec_stage __attribute__((weak_import));
 extern volatile int zeus_libexec_status __attribute__((weak_import));
@@ -1296,6 +1297,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     char row[120];
     snprintf(row, sizeof row, "[launch trace] adrenoprobed %u/%u e%u launchd_cache_loader %u/%u e%u", zeus_exec_trace[0], zeus_exec_trace[1],
              zeus_exec_trace[2], zeus_exec_trace[3], zeus_exec_trace[4], zeus_exec_trace[5]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // patches/xnu-12377/zeus-exit-trace.patch: the probe daemon's exits, last wait status and exit reason (namespace 2 = jetsam).
+  if (&zeus_exit_trace) {
+    char row[120];
+    snprintf(row, sizeof row, "[exit trace] adrenoprobed %u xstat %x reason %u/%x", zeus_exit_trace[0], zeus_exit_trace[1],
+             zeus_exit_trace[2], zeus_exit_trace[3]);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&zeus_launchd_cache_stage) {

@@ -12,3 +12,4 @@ zeus-pmap-extra-dram.patch
 gpupool-device-pager-close.patch
 zeus-launchd-cache-overlay.patch
 zeus-exec-trace.patch
+zeus-exit-trace.patch

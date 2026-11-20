@@ -1,0 +1,32 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -2369,6 +2369,9 @@
+ 	proc_unlock(p);
+ }
+ 
++/* zeus: see P_LPEXIT in proc_exit. */
++volatile uint32_t zeus_exit_trace[4];
++
+ void
+ proc_exit(proc_t p)
+ {
+@@ -2408,6 +2411,19 @@
+ 	}
+ 
+ 	p->p_lflag |= P_LPEXIT;
++	/*
++	 * zeus (patches/xnu-12377/zeus-exit-trace.patch): how the GPU probe daemon ends, for the boot log ([exit trace], system group):
++	 * [0] exits, [1] the last wait status (p_xstat), [2] the last exit reason's namespace (OS_REASON_*: 2 JETSAM, 3 SIGNAL, 9 EXEC, ...),
++	 * [3] its code (low 32 bits). A jetsam kill leaves no crash report, so this is the only record of one.
++	 */
++	if (strncmp(p->p_comm, "adrenoprobed", sizeof(p->p_comm)) == 0) {
++		zeus_exit_trace[0] = zeus_exit_trace[0] + 1;
++		zeus_exit_trace[1] = (uint32_t)p->p_xstat;
++		if (p->p_exit_reason != OS_REASON_NULL) {
++			zeus_exit_trace[2] = p->p_exit_reason->osr_namespace;
++			zeus_exit_trace[3] = (uint32_t)p->p_exit_reason->osr_code;
++		}
++	}
+ 
+ 	/*
+ 	 * Other kernel threads may be in the middle of signalling this process.

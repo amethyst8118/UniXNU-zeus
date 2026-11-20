@@ -1,0 +1,34 @@
+# iOS 26.5.2 (23F84) bring-up, milestone 1: kernel, UFS root, Data, launchd. Display and GPU come back once the
+# 23F84 IOMobileFramebufferLegacy and IOAcceleratorES records exist (docs/PLAN-IOS26.md in the workspace).
+CONFIG_XNU_BUILD_ARCHIVES=y
+CONFIG_XNU_CRYPTO_BOOTSTRAP="source"
+CONFIG_XNU_DT_PANIC_REGION=y
+CONFIG_XNU_ARMVIRT_PLATFORM=n
+CONFIG_XNU_KERNEL_CHAINED_FIXUPS=y
+# SM8450 UFS uses the waipio-adapted ShengUfs tree below.
+# SM8450 UFS source storage: ShengUfs tree adapted to waipio; the cupid dummy
+# policy directory satisfies the build checks and the driver forces
+# NATIVE_VERIFIED_BLOCK=0 for the first root bring-up.
+# The ShengUfs component archive (build/sheng-ufs/libShengUfs.a) is force-loaded
+# by build-xnu-4k-baseline.sh when CONFIG_XNU_NATIVE_UFS=y; do not add it to
+# CONFIG_XNU_EXTRA_LD_ARCHIVES or the same objects link twice.
+CONFIG_XNU_NATIVE_UFS=y
+CONFIG_XNU_SOURCE_STORAGE=y
+# The original APFS kext's FSIOC_KERNEL_ROOTAUTH fails on the unsealed source
+# root; the sheng owner-root trust path accepts the source-storage root when
+# native_verified_block_root_authorized() agrees. In the unverified bring-up
+# that query accepts by construction.
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+# Writable Data (sheng chain): without it launchd stops in its
+# ignition/Data phase (nproc=2, swapfile EROFS; docs in notes/DATA-SEED.md).
+# The Data volume comes from the payload's Data seed RAM disk (RamBlock); the
+# SystemOS cryptex and boot manifest come from the owner cache chain.
+# CONFIG_XNU_OWNER_DATA_VOLUME_UUID is rewritten by unixnu runtime to the seed's UUID.
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="00000000-0000-0000-0000-000000000000"

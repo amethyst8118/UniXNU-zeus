@@ -10,10 +10,10 @@ description = "Xiaomi 12 Pro (zeus)"
 # zeus (Xiaomi 12 Pro), derived from obaosp/UniXNU-cupid. This only changes the package folder, not any output name.
 kit = "sheng"
 soc_source = "sm8450"
-# iPhone-flavoured iOS 27 profile. The profile is shipped in this repository
+# iPhone-flavoured iOS 26.5.2 (23F84) profile (iOS 27 lives on branch zeus-ios27). The profile is shipped in this repository
 # under profiles/os/ and installed into the UniXNU checkout by
 # scripts/install-os-profile.sh; UniXNU main does not carry it yet.
-os_profile = "ios-27.0.1-24A446"
+os_profile = "ios-26.5.2-23F84"
 
 [userdata]
 # Measured on zeus (TWRP, root, 2026-11-16): /dev/block/by-name/userdata ->
@@ -31,7 +31,7 @@ lba_bytes = 4096
 include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal"]
 
 [kernel]
-defconfig = "zeus_ios27_defconfig"
+defconfig = "zeus_ios26_defconfig"
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
@@ -41,16 +41,9 @@ archives = [
   "build-fileset-release-reference.py --tree . --lto",
   "component:ShengUfs",
   "component:RamBlock",
-  "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446",
-  # GPU: sheng's driver core without its A740 GMU platform, and the staged accelerator bound to this kernelcache. Inert unless gpu-power asks.
-  "build-zeus-adreno.py",
-  "stage-zeus-accelerator-abi.py",
-  "build-adreno740-accelerator.py",
-  "build-zeus-adreno.py --finish",
-  # Display: aston's iPhone17,2 (d94ap) IOMobileFramebufferLegacy binding on the firmware GOP framebuffer, CPU path.
-  # The keystore state service, built before the display archive that links its late object (as aston).
+  "build-sheng-source-storage.py --policy-dir scripts/policies/ios-26.5.2-23F84",
+  # GPU and display (zeus Adreno, accelerator ABI, legacy display) return once their 23F84 records exist.
   "component:AppleKeyStoreState",
-  "build-zeus-legacy-display-27.py",
 ]
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8450.config", "os:configs/ios.config"]
 patch_series = [
@@ -104,7 +97,7 @@ ENABLE_SECUREBOOT = "1"
 DEVICE_MODEL = "zeus"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
-BUILDID_STRING = "zeus-ios27"
+BUILDID_STRING = "zeus-ios26"
 
 [bootimg]
 dtb = "build/zeus/zeus.dtb"
@@ -116,20 +109,19 @@ dtb = "build/zeus/zeus.dtb"
 volume = "ZEUSESP"
 size_mib = 176
 loader = "firmware"
-title = "iOS 27"
+title = "iOS 26"
 dram_size = "0x80000000"
 panic_screen = true
 # UFS root on: the kernel takes its root from the SHNGROOT windows in userdata.
 # With Android data still in userdata the driver only reads the GPT and LBA
 # 3170304 and rejects the missing manifest (cupid notes/ROOT-UFS.md).
-# zeus-panic-after=300 (patches/xnu-12377/zeus-panic-after.patch): diagnostic only, panics 300 s after
-# vfsinit with the kernel log tail on screen because ramoops is overwritten by the UEFI. Remove after.
+# (iOS 26 branch: the zeus-panic-after diagnostic patch is not in the series.)
 # data-persist=2 (sheng): the 4 GiB Data seed is a "big" RAM disk (logical > 2 GiB) with no volatile mode; without
 # the persistent store every write returns kIOReturnNotReady ("disk1: device is not ready", boot log 6c39b67d7).
 # The store is a window just below the 1 GiB log reserve at the end of userdata (NativeUfs.cpp, guarded).
 # smp=1: all eight cores, with ArmCpu's SGI IPIs. Never armcpu-spi-ipi=1 here (sheng's IPI path): a secondary core that
 # pends SPI 1008 at the distributor powers the phone off under Gunyah within a fraction of a second (docs/STATE.md, 2026-11-18).
-kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "data-persist=2", "smp=1", "offline-key-events=1", "sheng-aks=1", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "cpufreq=3", "zeus-usb=1", "sched_preemption_disable_debug_mode=1", "interrupt-masked-debug-mode=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=3", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "vsync=60", "vsync-fixed=1", "zeus-usbeth=2"]
+kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "amfi_get_out_of_my_way=1", "log=1", "data-persist=2", "smp=1", "offline-key-events=1", "sheng-aks=1", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "cpufreq=3", "armcpu-edge=1", "zeus-usb=1", "sched_preemption_disable_debug_mode=1", "interrupt-masked-debug-mode=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=3", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "vsync=60", "vsync-fixed=1", "zeus-usbeth=2"]
 
 [payload.runtime]
 # Minimal iOS 27 runtime (sheng's [payload.runtime] without display, GPU addon,
@@ -139,7 +131,7 @@ kernel_args = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_
 tool = "scripts/build-boot-runtime.py"
 data_seed_tool = "scripts/make-data-seed.py"
 target = "ios27"
-build = "24A446"
+build = "23F84"
 data_gib = 4
 skip_setup = true
 gpu_addon = false
@@ -201,4 +193,4 @@ home-button-type = 2
 unixnu = "../UniXNU"
 
 [package.defconfig]
-"ios-27.0.1-24A446" = "zeus_ios27_defconfig"
+"ios-26.5.2-23F84" = "zeus_ios26_defconfig"

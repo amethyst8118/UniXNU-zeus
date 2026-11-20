@@ -147,15 +147,18 @@ ref = "libpthread-539.100.4"
 commit = "1f4f5265b319111142f1bf3a27d4484ef5a98314"
 
 [userdata]
-windows = [{ name = "OS", component = "OS" }, { name = "SystemOS", component = "Cryptex1,SystemOS", optional = true }]
+# As the macOS profile: OS, the system cryptex and the application cryptex (AppOS: Safari's daemons, 14 MB).
+windows = [{ name = "OS", component = "OS" }, { name = "SystemOS", component = "Cryptex1,SystemOS", optional = true }, { name = "App", component = "Cryptex1,AppOS", optional = true }]
 
 [root]
-# The decrypted iPhone17,2 images (OS = 043-69909-664.dmg.aea, Cryptex1,SystemOS = 043-68526-711.dmg.aea): raw APFS
-# containers without a partition map, so the .dmg sha256 is the raw disk digest the root policies sign.
-os_volume_uuid = "E3F4AED0-4454-4D5B-833C-E27E99C4F67B"
-os_image_sha256 = "4b8719fe44a2b80cba9e108ebcec91b6b8a03a3c3ffe353befce3b100f2e6f25"
-systemos_volume_uuid = "8B599D21-9ABD-4050-8BA2-C61349890BED"
-systemos_image_sha256 = "f6d10101770604271c332d27290a48558ceb34f041c4020aae07ee6ca80dbb1b"
+# The decrypted iPhone17,2 23F84 images (OS 094-54688-107, Cryptex1,SystemOS 094-54806-109, Cryptex1,AppOS 094-54871-112): raw
+# APFS containers without a partition map, so each .dmg's sha256 is the raw disk digest the root policies sign (read 2026-11-21).
+os_volume_uuid = "1A2E284A-0A7E-40A9-8F5D-35A1C1F44E9E"
+os_image_sha256 = "14b119c0d44826e080c9cd61f3f5cf9ff7449d990b1f5e0dfb4b93fc3a29d58b"
+systemos_volume_uuid = "21AAD942-A60B-4026-B7B4-0A57205CC9A9"
+systemos_image_sha256 = "7e992fd0fde7339a45607b511f4c024641f71095c6730de0a1c9f47b3970df56"
+app_volume_uuid = "000DECA6-0430-4410-ABB5-7D2B749D281F"
+app_image_sha256 = "750cfbcadbc617146832ce7adfaddd61d734930f0d29cb15f32c4617a1c15320"
 
 [payload.adt]
-root_match_volume_uuid = "E3F4AED0-4454-4D5B-833C-E27E99C4F67B"
+root_match_volume_uuid = "1A2E284A-0A7E-40A9-8F5D-35A1C1F44E9E"

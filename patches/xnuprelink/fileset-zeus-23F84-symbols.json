@@ -550,5 +550,12 @@
       "addend": 0,
       "evidence": "GOT target of IOSerialFamily and com.apple.nke.ppp. Incremented unconditionally by Apple's ttyinput after the canonical/raw counter (see the tk_rawcc entry): bsd/kern/tty.c tk_nin (exported). Checked 2026-11-21."
     }
+  ],
+  "sites": [
+    {
+      "site": "0xfffffff007f3ff68",
+      "native_symbol": "_unixnu_kernel_stack_shift",
+      "evidence": "AppleMobileFileIntegrity's GOT slot for PAGE_SHIFT_CONST (23F84). Live reader: the CoreEntitlements DER iterator at 0xfffffff008ee9968 (0x...99ac: sp & ((1 << *slot) - 1) < 0x80 takes the error exit), which assumes 16 KiB-aligned kernel stacks; with the native 4 KiB page shift it fired inside a good stack and AMFI panicked 'failed to create OSDictionary copy: 14' @OSEntitlements.cpp:806 on posix_spawn (2026-11-21), as on 24A446 (fixed there by the same binding). Second reader 0x...335c rounds the length of the blob at entitlements-record +0xa0 before kmem_free, but only when that field is non-NULL: the record comes from zalloc_ro with Z_ZERO (0x8004) and AMFI's only zalloc_ro_mut to +0xa0 stores NULL, so that branch does not run. Revisit if a 23F84 path is found that sets +0xa0."
+    }
   ]
 }

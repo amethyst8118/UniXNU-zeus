@@ -1,6 +1,7 @@
 source-storage-runtime.patch
 zeus-owner-cache-diag.patch
 zeus-initproc-crash.patch
+zeus-sheng-kernel-fixes.patch
 zeus-smp-poc-cleans.patch
 zeus-smp-kernel-clean.patch
 zeus-no-bulk-setway.patch

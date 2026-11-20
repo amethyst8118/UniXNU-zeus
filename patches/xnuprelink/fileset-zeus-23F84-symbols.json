@@ -194,6 +194,13 @@
       "evidence": "identical bytes to a reviewed function bound to _csblob_get_trust_level (carried 2026-11-21); callers: AppleMobileFileIntegrity. Call-sequence alignment of its AppleMobileFileIntegrity callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _csblob_get_trust_level."
     },
     {
+      "original": "0xfffffff00ab64a18",
+      "original_size": 272,
+      "original_sha256": "5680f08b8fd411af2a4bea5c0551ab27fb88035cf0535b200725e99088b69cf5",
+      "native_symbol": "_csfg_get_teamid",
+      "evidence": "(fileglob): requires the fileglob type to be DTYPE_VNODE, takes the vnode lock, requires v_type VREG (+0x71 == 1), follows v_ubcinfo (+0x78) and cs_blobs (+0x50) and returns the 64-bit field at +0x88 before unlocking. Native csfg_get_teamid uses the same +0x78/+0x50/+0x88 chain, and Apple places it between csfg_get_cdhash and csfg_get_csblob as in bsd/kern/kern_cs.c. AMFI import."
+    },
+    {
       "original": "0xfffffff00ab9ecb4",
       "original_size": 76,
       "original_sha256": "25a68a48ad38015869786aff38bb1fbafb069e9bceccc5c156fddc5ec5dc168c",
@@ -276,6 +283,13 @@
       "original_sha256": "6cdcae5a530f38426435d98eb09b63bfbf95ac7f19bb4b0de199844e07d13852",
       "native_symbol": "_query_trust_cache_for_rem",
       "evidence": "(cdhash, rem_perms): NULL cdhash returns 4; builds a trust-cache query with selector 0xf and writes one result byte to rem_perms. bsd/kern/kern_trustcache.c query_trust_cache_for_rem; the 24A446 function using selector 0xf the same way is query_trust_cache_for_rem_with_length (iOS 27 rename)."
+    },
+    {
+      "original": "0xfffffff00abda26c",
+      "original_size": 240,
+      "original_sha256": "a8050652801a1baecf87a78e2261d8686dcc04ac470aa0fda01159776140c5d2",
+      "native_symbol": "_code_signing_configuration",
+      "evidence": "(monitor_type_out, config_out): load-acquire of the config-set flag, otherwise builds the CS_CONFIG_* mask from cached monitor state, stores monitor type 2 and the config, store-release of the flag, then writes each non-NULL output: bsd/kern/kern_codesigning.c code_signing_configuration (cs_config_set, cs_monitor, cs_config). AMFI and AppleImage4 import."
     },
     {
       "original": "0xfffffff00abda428",
@@ -409,6 +423,13 @@
       "original_sha256": "a440d56c8a3cc925e4d8f0d0a04c543be612bf3c1c343e66273a1ec013d53e57",
       "native_symbol": "_IOCircularDataQueueEnqueue",
       "evidence": "same relocation-masked instruction shape as the iPhone17,2 24A446 function (reviewed or paired in the iOS 27 zeus build) bound to _IOCircularDataQueueEnqueue (carried 2026-11-21); callers: IOHIDFamily."
+    },
+    {
+      "original": "0xfffffff00ae23e80",
+      "original_size": 304,
+      "original_sha256": "c32b68b3f6795c0ff50e5b23341b556d854f6e6b07f7b3665b3e43cbd2dc8ada",
+      "native_symbol": "__ZN10IOReporter12updateReportEP19IOReportChannelListjPvS2_",
+      "evidence": "Locks the spin lock at this+0x80 with interrupts disabled (state saved at +0x78), sets the locked byte at +0x48, calls the vtable method at +0xa0 with the incoming arguments, clears the byte and unlocks: iokit/Kernel/IOReporter.cpp IOReporter::updateReport (lockReporter, handleUpdateReport, unlockReporter). The only unpaired native IOReporter method of that form; AppleARMPlatform import."
     },
     {
       "original": "0xfffffff00ae82954",

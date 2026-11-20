@@ -1,0 +1,63 @@
+{
+  "inputs": {
+    "kernelcache_sha256": "2276364d028954a1152e721820f243f9400ce5d4b13c6d57f021f010afd1eabf",
+    "entry": "com.apple.kernel"
+  },
+  "functions": [],
+  "data": [
+    {
+      "original": "0xfffffff00b1ad070",
+      "native_symbol": "_vnop_getnamedstream_desc",
+      "addend": 0,
+      "evidence": "APFS GOT target. vnodeop_desc whose vdesc_name (chained pointer at +8) is the string vnop_getnamedstream; native _vnop_getnamedstream_desc is the same descriptor (bsd/vfs/vnode_if.c). vfs_fsadd indexes the operation vector by the descriptor's offset, so an unbound one reads native data (2026-11-02 vfs_fsadd panic on 27). Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b1ad0b0",
+      "native_symbol": "_vnop_makenamedstream_desc",
+      "addend": 0,
+      "evidence": "APFS GOT target. vnodeop_desc whose vdesc_name at +8 is the string vnop_makenamedstream; native _vnop_makenamedstream_desc (bsd/vfs/vnode_if.c). Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b1ad0f0",
+      "native_symbol": "_vnop_removenamedstream_desc",
+      "addend": 0,
+      "evidence": "APFS GOT target. vnodeop_desc whose vdesc_name at +8 is the string vnop_removenamedstream; native _vnop_removenamedstream_desc (bsd/vfs/vnode_if.c). Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b232a50",
+      "native_symbol": "_gIOAllCPUInitializedKey",
+      "addend": 0,
+      "evidence": "GOT target of AppleARMPlatform, AppleARMWatchdogTimer, AppleProcessorTrace and AppleT8140CLPC. AppleARMPlatform calls ml_cpu_init_completed and then IOService::publishResource(*slot, ...); the watchdog and a kernel function call IOService::resourceMatching(*slot, 0) and waitForMatchingServiceWithToken(..., -1, 0). That is the all-CPUs-initialized resource symbol (iokit/Kernel/IOService.cpp gIOAllCPUInitializedKey; UniXNU's iPad 23F84 fixture binds the same symbol). Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff007043690",
+      "native_symbol": "_PE_arm_debug_panic_hook",
+      "addend": 0,
+      "evidence": "GOT target of AppleARMWatchdogTimer and AppleProcessorTrace. Both read the pointer once and OSCompareAndSwapPtr a PAC-signed (IA, 0x2abe) callback of their own into it; the watchdog only when the -panic_notify boot argument is set (AppleARMWatchdogTimer::start). An exported pointer kexts swap a callback into is pexpert/arm/hwtrace/hwtrace.c PE_arm_debug_panic_hook (const NULL in Apple's RELEASE build, hence its read-only address; writable in the DEVELOPMENT native). Unbound, the swap would write native kernel text. Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b1cfce8",
+      "native_symbol": "_kdebug_enable",
+      "addend": 0,
+      "evidence": "GOT target of IOHIDFamily, AppleT8140CLPC and ExclaveKextClient. Each loads the 32-bit value and branches to a trace path when it is nonzero, before ordinary work (IOHIDFamily's IOHIDFamilyTrace.h kdebug macros). The exported 32-bit flag kexts test this way is bsd/kern/kdebug.c kdebug_enable. On 27 the same entry was left unbound and landed in zone_array. Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b1bbb24",
+      "native_symbol": "_gPESerialBaud",
+      "addend": 0,
+      "evidence": "GOT target of IOSerialFamily. Apple's initial value is -1; IOSerialFamily loads it and uses 9600 when it is -1, else the value, as the default line speed. The exported -1-initialized serial baud int is pexpert gPESerialBaud. Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b22e398",
+      "native_symbol": "_tk_rawcc",
+      "addend": 0,
+      "evidence": "GOT target of IOSerialFamily. In ttyinput Apple's kernel increments 0x...e390 when ICANON is set and 0x...e398 otherwise, then 0x...e3a0 always; ttyoutput increments 0x...e3a8. bsd/kern/tty.c: ICANON ? tk_cancc++ : tk_rawcc++; tk_nin++; ttyoutput tk_nout++. So e398 is tk_rawcc (exported). Checked 2026-11-21."
+    },
+    {
+      "original": "0xfffffff00b22e3a0",
+      "native_symbol": "_tk_nin",
+      "addend": 0,
+      "evidence": "GOT target of IOSerialFamily and com.apple.nke.ppp. Incremented unconditionally by Apple's ttyinput after the canonical/raw counter (see the tk_rawcc entry): bsd/kern/tty.c tk_nin (exported). Checked 2026-11-21."
+    }
+  ]
+}

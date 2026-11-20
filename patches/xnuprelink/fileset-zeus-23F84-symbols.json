@@ -26,6 +26,20 @@
       "evidence": "Call-sequence alignment of its apfs callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 2 aligned call(s) name _lck_rw_gate_destroy."
     },
     {
+      "original": "0xfffffff00a6d1dd4",
+      "original_size": 308,
+      "original_sha256": "adbbc0f8e1f90992e462d18003db5e34028f5df987650cc25f302298625e6b65",
+      "native_symbol": "_lck_rw_gate_try_close",
+      "evidence": "(lock, gate): validates and operates on the gate in x1 (gate type bits at +0x10, gt_data at +0) after the rw-gate destroy wrapper, as osfmk/kern/locks.c lck_rw_gate_try_close(lock, gate) with gate_try_close inlined. The automatic reference-order pairing named the internal static gate_try_close(gate), which takes the gate in x0: APFS would pass its lock as the gate."
+    },
+    {
+      "original": "0xfffffff00a6d1f08",
+      "original_size": 284,
+      "original_sha256": "2ecc93b7c41fd9c805ff1226831c3b129aa72be0b6488ee6c5b91299759f4bd5",
+      "native_symbol": "_lck_rw_gate_close",
+      "evidence": "(lock, gate): reads the gate from x1 (type bits at +0x10, gt_data at +0), as osfmk/kern/locks.c lck_rw_gate_close(lock, gate) with gate_close inlined. The reference-order pairing to the internal gate_close(gate) took APFS lock pointer as the gate: first 23F84 boot panicked \"Gate used is invalid ... flags 6b736964 (disk)\" in devfs_kernel_mount -> namei -> APFS lookup (2026-11-21)."
+    },
+    {
       "original": "0xfffffff00a6d2f60",
       "original_size": 56,
       "original_sha256": "f3ac36c4afc2132c72e04012f6911fba17e5db4c5faa10893e16d8dc8179deb4",

@@ -2,3 +2,4 @@
 arch:../../../patches/xnu-12377/zzz-boot-progress.patch
 ../xnu-12377/trust-cache-query-types.patch
 ../xnu-12377/zeus-exit-names.patch
+../xnu-12377/zeus-staged-union.patch

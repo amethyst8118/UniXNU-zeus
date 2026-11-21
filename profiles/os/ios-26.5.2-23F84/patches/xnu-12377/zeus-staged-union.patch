@@ -1,0 +1,205 @@
+--- a/bsd/kern/kern_exec.c	2026-11-21 15:24:24
++++ b/bsd/kern/kern_exec.c	2026-11-21 15:24:24
+@@ -8951,8 +8951,184 @@
+ 	}
+ 	zeus_migration_rerun_status = error;
+ 	printf("zeus-data: migration marker removal %d\n", error);
++}
++
++/*
++ * zeus (after UniXNU-sheng zzzz-sheng-ipados27-bringup.patch, native_staged_apps_union and native_ls_store_drop): the iPadOS 27
++ * way to the deletable system apps without the first-boot data migration. On zeus 23F84 that migration never ends: SystemAppMigrator
++ * finds no staged apps in Data and waits out a ~33 min timeout, then com.apple.timed.migrator never returns (timed waits for a network
++ * it will not get). So:
++ *  - owner-staged-apps=1 shows the OS volume's sealed /private/var/staged_system_apps read-only over /Applications, mounted while
++ *    /private/var is still the OS volume (the Data mount covers it next); the apps register as built-in system apps (static trust
++ *    cache), and lsd's database is dropped at every boot after the Data mount so lsd rebuilds it with them (a database written back
++ *    after an unclean shutdown can miss them). The lsd container's UUID is made with the Data store, so it is searched for.
++ *  - migration-done=1 writes the seed's com.apple.migration.plist (LastSystemVersion 23F84) when Data has none (sheng-rerun-migration
++ *    removed it), so datamigrator does not start the migration.
++ * Never panics: each step only records a status and prints it.
++ */
++volatile int native_staged_union_stage = 0;
++volatile int native_staged_union_status = -1;
++static void
++native_staged_apps_union(proc_t p, user_addr_t scratch)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("owner-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	static const char source[] = "/private/var/staged_system_apps", point[] = "/Applications";
++	native_gpu_addon_mount(p, scratch, 0x800, source, sizeof(source), point, sizeof(point), "/Applications/Preferences.app/Info.plist",
++	    "/Applications/Weather.app/Info.plist", &native_staged_union_stage, &native_staged_union_status);
++	printf("zeus-apps: staged apps union over /Applications stage %d status %d\n", native_staged_union_stage, native_staged_union_status);
++}
++
++volatile int zeus_ls_store_status = -1;
++static int
++zeus_ls_store_names(const char *path, const char *prefix, char (*names)[64], unsigned max, unsigned *found)
++{
++	/* The entries of directory path whose names start with prefix ("" for all but . and ..), at most max of them. */
++	vfs_context_t ctx = vfs_context_current();
++	vnode_t vp = NULLVP;
++	*found = 0;
++	int error = vnode_lookup(path, 0, &vp, ctx);
++	if (error) {
++		return error;
++	}
++	char *buffer = kalloc_data(4096, Z_WAITOK);
++	uio_t uio = buffer ? uio_create(1, 0, UIO_SYSSPACE, UIO_READ) : NULL;
++	if (!uio) {
++		error = ENOMEM;
++	}
++	int eof = 0;
++	const size_t prefix_length = strlen(prefix);
++	while (uio && !eof && *found < max) {
++		uio_reset(uio, uio_offset(uio), UIO_SYSSPACE, UIO_READ);
++		uio_addiov(uio, CAST_USER_ADDR_T(buffer), 4096);
++		int entries = 0;
++		error = VNOP_READDIR(vp, uio, 0, &eof, &entries, ctx);
++		if (error) {
++			break;
++		}
++		size_t used = 4096 - (size_t)uio_resid(uio);
++		if (!used) {
++			break;
++		}
++		for (size_t at = 0; at + sizeof(struct dirent) - sizeof(((struct dirent *)0)->d_name) <= used && *found < max;) {
++			const struct dirent *entry = (const struct dirent *)(buffer + at);
++			if (!entry->d_reclen) {
++				break;
++			}
++			const int dot = entry->d_name[0] == '.' && (entry->d_namlen == 1 || (entry->d_namlen == 2 && entry->d_name[1] == '.'));
++			if (!dot && entry->d_namlen < 64 && !strncmp(entry->d_name, prefix, prefix_length)) {
++				memcpy(names[*found], entry->d_name, entry->d_namlen);
++				names[(*found)++][entry->d_namlen] = 0;
++			}
++			at += entry->d_reclen;
++		}
++	}
++	if (uio) {
++		uio_free(uio);
++	}
++	if (buffer) {
++		kfree_data(buffer, 4096);
++	}
++	vnode_put(vp);
++	return error;
++}
++/* Status: removed * 1000 + data containers looked at, or -errno. */
++static void
++zeus_ls_store_drop(proc_t p, user_addr_t scratch)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("owner-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	static const char *const parents[] = {"/private/var/mobile/Containers/Data/InternalDaemon", "/private/var/containers/Data/InternalDaemon",
++		                              "/private/var/containers/Data/System"};
++	static const char prefix[] = "com.apple.LaunchServices-";
++	char (*containers)[64] = kalloc_data(128 * 64, Z_WAITOK);
++	char (*files)[64] = kalloc_data(8 * 64, Z_WAITOK);
++	char *path = kalloc_data(256, Z_WAITOK);
++	int removed = 0, looked = 0;
++	if (!containers || !files || !path) {
++		zeus_ls_store_status = -ENOMEM;
++		goto done;
++	}
++	for (size_t k = 0; k < sizeof(parents) / sizeof(parents[0]); ++k) {
++		unsigned count = 0;
++		if (zeus_ls_store_names(parents[k], "", containers, 128, &count)) {
++			continue;
++		}
++		for (unsigned i = 0; i < count; ++i) {
++			snprintf(path, 256, "%s/%s/Library/Caches", parents[k], containers[i]);
++			unsigned n = 0;
++			if (zeus_ls_store_names(path, prefix, files, 8, &n)) {
++				continue;
++			}
++			looked++;
++			for (unsigned j = 0; j < n; ++j) {
++				snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], containers[i], files[j]);
++				struct unlink_args request = {.path = scratch + 0xc00};
++				int32_t result = 0;
++				if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
++					removed++;
++				}
++			}
++		}
++	}
++	zeus_ls_store_status = removed * 1000 + looked;
++done:
++	if (containers) {
++		kfree_data(containers, 128 * 64);
++	}
++	if (files) {
++		kfree_data(files, 8 * 64);
++	}
++	if (path) {
++		kfree_data(path, 256);
++	}
++	printf("zeus-apps: LaunchServices database drop %d (removed*1000 + containers)\n", zeus_ls_store_status);
+ }
+ 
++/* Status: 0 written, 1 already there, -1 not asked, else the error. */
++volatile int zeus_migration_done_status = -1;
++static void
++zeus_migration_done(void)
++{
++	static const char path[] = "/private/var/mobile/Library/Preferences/com.apple.migration.plist";
++	static const char plist[] =
++	    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
++	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
++	    "<plist version=\"1.0\">\n<dict>\n"
++	    "\t<key>DMUserDataDisposition</key>\n\t<dict>\n"
++	    "\t\t<key>SyntheticDidUpgrade</key>\n\t\t<false/>\n"
++	    "\t\t<key>buildVersion</key>\n\t\t<string>23F84</string>\n\t</dict>\n"
++	    "\t<key>LastSystemVersion</key>\n\t<string>23F84</string>\n"
++	    "</dict>\n</plist>\n";
++	uint32_t asked = 0;
++	if (!PE_parse_boot_argn("migration-done", &asked, sizeof(asked)) || asked != 1) {
++		return;
++	}
++	vfs_context_t ctx = vfs_context_current();
++	vnode_t vp = NULLVP;
++	int error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx);
++	if (!error) {
++		vnode_put(vp);
++		zeus_migration_done_status = 1;
++	} else {
++		error = native_gpu_addon_write(path, (const uint8_t *)plist, sizeof(plist) - 1, 0600, ctx);
++		if (!error && !(error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx))) {
++			struct vnode_attr va;
++			VATTR_INIT(&va);
++			VATTR_SET(&va, va_uid, 501);
++			VATTR_SET(&va, va_gid, 501);
++			error = vnode_setattr(vp, &va, ctx);
++			vnode_put(vp);
++		}
++		zeus_migration_done_status = error;
++	}
++	printf("zeus-data: migration marker %d (0 written, 1 present)\n", zeus_migration_done_status);
++}
++
+ static int
+ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ {
+@@ -8996,6 +9172,8 @@
+ 	    (error = copyout("/private/var", request.path, 13)) ||
+ 	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
+ 	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
++	/* still the OS volume's /private/var */
++	native_staged_apps_union(p, scratch);
+ 	native_owner_data_stage = 2;
+ 	error = mount(p, &request, &result);
+ 	if (error) goto done;
+@@ -9012,6 +9190,8 @@
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
+ 	if (!error) zeus_migration_rerun(p, scratch);
++	if (!error) zeus_migration_done();
++	if (!error) zeus_ls_store_drop(p, scratch);
+ 	if (!error) native_gpu_addon_prepare(p, scratch);
+ 	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
+ done:

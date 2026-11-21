@@ -1,0 +1,56 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -2367,6 +2367,36 @@
+ 		ut->uu_siglist = 0;
+ 	}
+ 	proc_unlock(p);
++}
++
++/*
++ * zeus (profiles/os/ios-26.5.2-23F84/patches/xnu-12377/zeus-exit-names.patch): print how selected processes end, to the
++ * boot log. Boot-arg exit-name=a,b,c (p_comm names, max 127 chars); default = the daemons that respawn during migration.
++ */
++static bool
++zeus_exit_name_match(const char *comm)
++{
++	static char names[128];
++	static int loaded;
++	if (!loaded) {
++		if (!PE_parse_boot_argn("exit-name", names, sizeof(names))) {
++			strlcpy(names, "fairplayd.H2,seputil,aonsensed,com.apple.datami,datamigrator", sizeof(names));
++		}
++		loaded = 1;
++	}
++	size_t len = strnlen(comm, MAXCOMLEN + 1);
++	const char *c = names;
++	while (*c) {
++		const char *e = c;
++		while (*e && *e != ',') {
++			e++;
++		}
++		if ((size_t)(e - c) == len && strncmp(c, comm, len) == 0) {
++			return true;
++		}
++		c = *e ? e + 1 : e;
++	}
++	return false;
+ }
+ 
+ void
+@@ -2408,6 +2438,16 @@
+ 	}
+ 
+ 	p->p_lflag |= P_LPEXIT;
++	if (zeus_exit_name_match(p->p_comm)) {
++		static uint32_t zeus_exit_lines;
++		if (os_atomic_inc_orig(&zeus_exit_lines, relaxed) < 400) {
++			os_reason_t r = p->p_exit_reason;
++			printf("zeus-exit: %s[%d] xstat 0x%x reason ns %u code 0x%llx
++", p->p_comm, proc_getpid(p),
++			    (unsigned)p->p_xstat, r != OS_REASON_NULL ? r->osr_namespace : 0,
++			    r != OS_REASON_NULL ? (unsigned long long)r->osr_code : 0ULL);
++		}
++	}
+ 
+ 	/*
+ 	 * Other kernel threads may be in the middle of signalling this process.

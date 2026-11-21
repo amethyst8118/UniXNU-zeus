@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c	2026-11-21 15:45:30
 +++ b/bsd/kern/kern_exec.c	2026-11-21 15:45:30
-@@ -8951,8 +8951,203 @@
+@@ -8951,8 +8951,251 @@
  	}
  	zeus_migration_rerun_status = error;
  	printf("zeus-data: migration marker removal %d\n", error);
@@ -201,10 +201,58 @@
 +	    native_cryptex_os_status);
 +}
 +
++/*
++ * zeus: the user domain's system-proxy persona before launchd starts. launchd spawns SpringBoard (02:56:21 in cryptex1) before
++ * usermanagerd (02:56:22) has made its personas, so SpringBoard and every other job run with no persona (runningboardd: "persona
++ * (null)"); LaunchServices then gives SpringBoard no record of its own ("Application proxy by bundleURL is invalid for current
++ * process"), SBApplicationController's _systemAppInfo stays nil and SpringBoard aborts in -[__NSSetM removeObject:]. UniXNU-diting,
++ * zizhan and unicorn hit launchd's PERSONA_SYSTEM_PROXY lookup failing the same way. With boot-arg zeus-persona=1 the kernel makes
++ * the persona usermanagerd itself defines for user 501 in this Data store (keybags/persona.kb: "Default", ID 200, unique string
++ * FEEDEEEE-DDDD-CCCC-BBBB-5555000001F5; lsd sees it as type SYSTEM_PROXY), as it would already exist after a userspace reboot.
++ * The registry keeps the allocation reference, as kpersona_alloc does. Status: 0 made, 1 already there, else the error.
++ */
++#if CONFIG_PERSONAS
++volatile int zeus_persona_status = -1;
++static void
++zeus_persona_bootstrap(void)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("zeus-persona", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	static const char login[] = "FEEDEEEE-DDDD-CCCC-BBBB-5555000001F5";
++	struct persona *existing = NULL;
++	size_t count = 1;
++	int error = 0;
++	if (persona_find(login, PERSONA_ID_NONE, &existing, &count) == 0) {
++		if (existing) {
++			persona_put(existing);
++		}
++		zeus_persona_status = 1;
++	} else {
++		struct persona *proxy = persona_alloc(200, login, PERSONA_SYSTEM_PROXY, NULL, 501, &error);
++		if (proxy) {
++			error = persona_init_begin(proxy);
++			persona_init_end(proxy, error);
++			if (error) {
++				persona_put(proxy);
++			}
++		}
++		zeus_persona_status = error;
++	}
++	printf("zeus-persona: system proxy persona 200 for uid 501: %d (0 made, 1 already there)\n", zeus_persona_status);
++}
++#else
++static void
++zeus_persona_bootstrap(void)
++{
++}
++#endif
++
  static int
  native_owner_data_prepare(proc_t p, user_addr_t scratch)
  {
-@@ -8996,6 +9191,8 @@
+@@ -8996,6 +9239,8 @@
  	    (error = copyout("/private/var", request.path, 13)) ||
  	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
  	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
@@ -213,13 +261,14 @@
  	native_owner_data_stage = 2;
  	error = mount(p, &request, &result);
  	if (error) goto done;
-@@ -9012,6 +9209,9 @@
+@@ -9012,6 +9257,10 @@
  	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
  	if (!error) native_owner_data_stage = 4;
  	if (!error) zeus_migration_rerun(p, scratch);
 +	if (!error) zeus_migration_done();
 +	if (!error) zeus_cryptex_os_view(p, scratch);
 +	if (!error) zeus_ls_store_drop(p, scratch);
++	if (!error) zeus_persona_bootstrap();
  	if (!error) native_gpu_addon_prepare(p, scratch);
  	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
  done:

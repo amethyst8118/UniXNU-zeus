@@ -425,6 +425,15 @@ void sheng_audio_probe(void) {}
 void sheng_backlight_probe(void) {}
 void aston_boot_screen_probe(void) {}
 // While no GPU is published every frame is already written when its swap arrives (submitted == retired).
+// iOS 26: HID, touch, buttons, USB, USB Ethernet and GPU are not built yet (they need 23F84 class fixtures); their probes,
+// called by native_legacy_display_late_probe, start nothing.
+void native_hid_input_probe(void) {}
+void native_touch_probe(void) {}
+void sheng_buttons_probe(void) {}
+void sheng_gpu_pool_probe(void) {}
+void sheng_gpu_power_probe(void) {}
+void sheng_usb_probe(void) {}
+void zeus_usbeth_probe(void) {}
 // iOS 26: no Adreno driver is linked yet.
 IOService *native_adreno_published_service() {return nullptr;}
 bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *detail) {

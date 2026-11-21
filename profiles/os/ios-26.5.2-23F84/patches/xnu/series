@@ -1,2 +1,3 @@
 # OS patch paths for xnu-12377.121.6, one per line in application order.
 arch:../../../patches/xnu-12377/zzz-boot-progress.patch
+../xnu-12377/trust-cache-query-types.patch

@@ -1,0 +1,30 @@
+iOS 26 AMFI asks the trust cache with query types past kTCQueryTypeLoadable (type 3, about once per exec); the public
+TrustCache header of xnu-12377.121.6 ends at 2, so xnu refused them before AMFI's own libTrustCache (the 23F84 one, which
+knows its types) could answer, and the refusal line filled the 128 KiB message buffer. Leave the check to that library;
+log a failure for a type this header does not know once.
+--- a/bsd/kern/kern_trustcache.c
++++ b/bsd/kern/kern_trustcache.c
+@@ -745,7 +745,7 @@ xnu_query_trust_cache(
+ 	kern_return_t ret = KERN_NOT_FOUND;
+ 
+ 	/* Validate the query type preemptively */
+-	if (query_type >= kTCQueryTypeTotal) {
++	if (query_type >= 0x10) {
+ 		printf("unable to query trust cache: invalid query type: %u\n", query_type);
+ 		return KERN_INVALID_ARGUMENT;
+ 	}
+@@ -765,9 +765,12 @@ xnu_query_trust_cache(
+ 	} else if (tc_ret.error == kTCReturnNotFound) {
+ 		ret = KERN_NOT_FOUND;
+ 	} else {
++		static uint32_t newer_type_failures;
+ 		ret = KERN_FAILURE;
+-		printf("trust cache query failed (TCReturn: 0x%02X | 0x%02X | %u)\n",
+-		    tc_ret.component, tc_ret.error, tc_ret.uniqueError);
++		if (query_type < kTCQueryTypeTotal || os_atomic_inc_orig(&newer_type_failures, relaxed) == 0) {
++			printf("trust cache query failed (type %u TCReturn: 0x%02X | 0x%02X | %u)\n",
++			    query_type, tc_ret.component, tc_ret.error, tc_ret.uniqueError);
++		}
+ 	}
+ 
+ 	return ret;

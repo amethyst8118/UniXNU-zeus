@@ -1566,49 +1566,214 @@ static uint32_t sweet_log_copy(uint64_t *pos, char *out, uint32_t max)
 }
 
 /*
- * zeusacm=1: the kernel log as raw bytes on bulk IN, one transfer of up to 2 KiB from UD_TX at a time, only while
- * the host has the port open (DTR); each open replays the ring. A transfer of a multiple of 512 bytes would need
- * a zero-length packet to end it, so it is cut one byte short.
+ * zeusacm=1 engine: one kernel thread does everything (DWC3 event polling, ep0, the log stream), so there is no
+ * second thread, no lock ping-pong and no 100 us polling (ud_thread's ECM fast path is not run in this mode).
+ *  - Big transfers: up to UA_XFER bytes of the message buffer in one bulk IN TRB from its own 64 KiB contiguous
+ *    buffer (two memcpy from the ring, no per-byte loop). High speed moves 32 KiB in about 1 ms, so even a 2 ms
+ *    poll is far above any log rate; a transfer of a multiple of 512 bytes is cut one byte short (no ZLP needed).
+ *  - Adaptive polling with timer leeway (coalesced wakeups): 2 ms while a transfer is in flight or for 100 ms
+ *    after any controller event, 10 ms while the port is open and idle, 25 ms while nobody has it open.
+ *  - Lossless across reconnects: ua_acked is the end of the last transfer the host acknowledged. A bus reset,
+ *    disconnect, port close or the 3 s stuck watchdog (End Transfer, ForceRM) resumes from there on the next open,
+ *    so at most the unacknowledged transfer is sent twice and nothing is skipped. The first open replays the ring.
+ *  - Overrun: if the ring wraps past unsent bytes, the stream gets "[zeus-acm: N bytes lost]" in-line.
+ *  - Every 60 s a "SWEET USB: acm" status line (bytes, transfers, lost, opens, stuck, resets) goes into the log.
  */
+#define UA_BUF_SIZE     0x10000         /* TRB at 0, data from UA_DATA */
+#define UA_DATA         0x1000
+#define UA_XFER         0x8000          /* 32 KiB per transfer */
+static vm_offset_t ua_va;
+static uint64_t ua_pa;
+static uint64_t ua_pos, ua_acked, ua_inflight_end;
+static bool ua_opened_once;
+static uint64_t ua_bytes, ua_xfers, ua_lost, ua_opens, ua_stuck_count;
+SYSCTL_QUAD(_kern, OID_AUTO, zeus_acm_bytes, CTLFLAG_RD | CTLFLAG_LOCKED, &ua_bytes, "");
+SYSCTL_QUAD(_kern, OID_AUTO, zeus_acm_lost, CTLFLAG_RD | CTLFLAG_LOCKED, &ua_lost, "");
+
 static void
-ud_acm_log_thread(void *arg __unused, wait_result_t wr __unused)
+ua_sleep(unsigned ms, unsigned leeway_ms)
 {
-	uint64_t pos = 0;
+	uint64_t deadline, leeway;
+	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
+	nanoseconds_to_absolutetime((uint64_t)leeway_ms * NSEC_PER_MSEC, &leeway);
+	if (assert_wait_deadline_with_leeway(&ud.sleep_chan, THREAD_UNINT,
+	    TIMEOUT_URGENCY_SYS_NORMAL | TIMEOUT_URGENCY_LEEWAY, deadline, leeway) == THREAD_WAITING) {
+		thread_block(THREAD_CONTINUE_NULL);
+	}
+}
+
+static uint64_t
+ua_ms(void)
+{
+	uint64_t ns;
+	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+	return ns / NSEC_PER_MSEC;
+}
+
+/* Copy up to max unsent message-buffer bytes from ua_pos into dst. */
+static uint32_t
+ua_copy(uint8_t *dst, uint32_t max)
+{
+	if (!msgbufp || msgbufp->msg_size <= 0) {
+		return 0;
+	}
+	uint64_t head = zeus_log_total();
+	uint64_t size = (uint64_t)msgbufp->msg_size;
+	uint32_t n = 0;
+	if (ua_pos > head || size <= 8192) {    /* never ahead of the writer (wrap tracking glitch) */
+		ua_pos = ua_pos > head ? head : ua_pos;
+		if (size <= 8192) {
+			return 0;
+		}
+	}
+	/* 4 KiB slack: printf may be overwriting the oldest bytes while they are copied */
+	if (ua_pos + size < head + 4096) {
+		uint64_t skip_to = head > size - 4096 ? head - (size - 4096) : 0;
+		if (skip_to > ua_pos) {
+			ua_lost += skip_to - ua_pos;
+			n = (uint32_t)snprintf((char *)dst, 64, "\n[zeus-acm: %llu bytes lost]\n",
+			    (unsigned long long)(skip_to - ua_pos));
+			ua_pos = skip_to;
+		}
+	}
+	uint64_t avail = head - ua_pos;
+	uint32_t want = (uint32_t)(avail < (uint64_t)(max - n) ? avail : (uint64_t)(max - n));
+	uint32_t off = (uint32_t)(ua_pos % size);
+	uint32_t first = want < (uint32_t)size - off ? want : (uint32_t)size - off;
+	memcpy(dst + n, (const void *)(msgbufp->msg_bufc + off), first);
+	if (want > first) {
+		memcpy(dst + n + first, (const void *)msgbufp->msg_bufc, want - first);
+	}
+	ua_pos += want;
+	return n + want;
+}
+
+/* Start the next bulk IN transfer if there is anything to send. ud.lock held, TX idle. */
+static void
+ua_kick_locked(void)
+{
+	uint8_t *data = (uint8_t *)(ua_va + UA_DATA);
+	uint64_t start = ua_pos;
+	uint32_t n = ua_copy(data, UA_XFER);
+	if (n > 1 && (n % 512) == 0) {
+		n--;
+		ua_pos--;
+	}
+	if (n == 0) {
+		ua_pos = start;
+		return;
+	}
+	flush_dcache64((addr64_t)(ua_pa + UA_DATA), n, TRUE);
+	volatile uint32_t *t = (volatile uint32_t *)ua_va;
+	uint64_t bpa = ua_pa + UA_DATA;
+	t[0] = (uint32_t)bpa;
+	t[1] = (uint32_t)(bpa >> 32);
+	t[2] = n;
+	t[3] = TRBCTL_NORMAL | TRB_HWO | TRB_LST | TRB_ISP_IMI | TRB_IOC;
+	flush_dcache64((addr64_t)ua_pa, 16, TRUE);
+	ud_tx_trb = ua_va;
+	ud_tx_trb_pa = ua_pa;
+	ud.tx_busy = true;
+	ua_inflight_end = ua_pos;
+	if (ud_epcmd(EP_TX, DEPCMD_STARTTRANSFER, (uint32_t)(ua_pa >> 32), (uint32_t)ua_pa, 0) != 0) {
+		ud.tx_busy = false;
+		ud_xact[EP_TX] = false;
+		ua_pos = ua_acked;      /* try again on the next tick */
+		return;
+	}
+	ud.tx_frames++;
+	ua_bytes += n;
+}
+
+static void
+ua_thread(void *arg __unused, wait_result_t wr __unused)
+{
+	uint64_t last_event = ua_ms(), busy_since = 0, last_status = ua_ms(), last_stuck = 0;
+	uint64_t seen_done = ud_tx_done;
 	bool open = false;
 	for (;;) {
-		ud_sleep_ms(20);
+		uint32_t count = dwc_rd(GEVNTCOUNT) & 0xffff;
+		uint64_t now = ua_ms();
+		if (count) {
+			ud_sync(UD_EVT, UD_EVT_SIZE);
+			for (uint32_t done = 0; done < count; done += 4) {
+				uint32_t ev = *(volatile uint32_t *)(ud.dma + UD_EVT + ud.evt_pos);
+				ud.evt_pos = (ud.evt_pos + 4) % UD_EVT_SIZE;
+				if (ud.events++ < 120 && (ev & 1)) {
+					printf("SWEET USB: event 0x%08x\n", ev);
+				}
+				ud_event(ev);
+			}
+			dwc_wr(GEVNTCOUNT, count);
+			last_event = now;
+		}
 		lck_mtx_lock(ud.lock);
+		if (ud_tx_done != seen_done) {          /* a transfer completed: the host has those bytes */
+			seen_done = ud_tx_done;
+			ua_acked = ua_inflight_end;
+			ua_xfers++;
+			busy_since = 0;
+		}
 		if (!ud.configured || !ud_acm_dtr) {
-			open = false;
-			lck_mtx_unlock(ud.lock);
-			continue;
-		}
-		if (!open) {
-			uint64_t total = sweet_log_position();
-			uint64_t size = (msgbufp && msgbufp->msg_size > 0) ? (uint64_t)msgbufp->msg_size : 0;
-			open = true;
-			pos = total > size ? total - size : 0;
-		}
-		if (!ud.tx_busy) {
-			uint64_t start = pos;
-			uint32_t n = sweet_log_copy(&pos, (char *)(ud.dma + UD_TX), UD_FRAME_MAX);
-			if (n > 0 && (n % 512) == 0) {
-				n--;
-				pos--;
+			if (open) {
+				open = false;
+				if (ud.tx_busy && ud_xact[EP_TX]) {
+					(void)ud_epcmd(EP_TX, DEPCMD_ENDTRANSFER | DEPCMD_FORCERM | ((uint32_t)ud_rsc[EP_TX] << 16), 0, 0, 0);
+					ud_xact[EP_TX] = false;
+					delay(100);
+				}
+				ud.tx_busy = false;
 			}
-			if (n > 0) {
-				ud.tx_busy = true;
-				ud_xact[EP_TX] = true;
-				ud.tx_frames++;
-				ud_tx_xfers++;
-				ud_tx_trb = ud.dma + UD_TRB_TX;
-				ud_tx_trb_pa = ud.dma_pa + UD_TRB_TX;
-				ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, n, TRBCTL_NORMAL);
-			} else {
-				pos = start;
+		} else {
+			if (!open) {
+				open = true;
+				ua_opens++;
+				uint64_t head = zeus_log_total();
+				uint64_t size = (msgbufp && msgbufp->msg_size > 4096) ? (uint64_t)msgbufp->msg_size - 4096 : 0;
+				uint64_t oldest = head > size ? head - size : 0;
+				/* first open: the whole ring (less ua_copy's slack); later: from the last acknowledged byte, and
+				 * ua_copy marks any part of it the ring has since overwritten */
+				ua_pos = ua_opened_once ? ua_acked : oldest;
+				ua_acked = ua_pos;
+				ua_opened_once = true;
+				ud.tx_busy = false;
+				busy_since = 0;
+			}
+			if (!ud.tx_busy) {
+				ua_kick_locked();
+				if (ud.tx_busy) {
+					busy_since = now;
+				}
+			} else if (busy_since && now - busy_since > 3000) {
+				/* no completion for 3 s with the port open: end it and resend from the last acknowledged byte */
+				(void)ud_epcmd(EP_TX, DEPCMD_ENDTRANSFER | DEPCMD_FORCERM | ((uint32_t)ud_rsc[EP_TX] << 16), 0, 0, 0);
+				ud_xact[EP_TX] = false;
+				delay(100);
+				ud.tx_busy = false;
+				ua_pos = ua_acked;
+				ua_stuck_count++;
+				busy_since = 0;
+				if (now - last_stuck > 30000) {
+					last_stuck = now;
+					printf("SWEET USB: acm transfer stuck 3 s, resent from the last acknowledged byte (stuck %llu)\n",
+					    ua_stuck_count);
+				}
 			}
 		}
+		bool busy = ud.tx_busy;
 		lck_mtx_unlock(ud.lock);
+		if (now - last_status >= 60000) {
+			last_status = now;
+			printf("SWEET USB: acm open %d bytes %llu xfers %llu lost %llu opens %llu stuck %llu resets %llu\n",
+			    open, ua_bytes, ua_xfers, ua_lost, ua_opens, ua_stuck_count, ud_resets);
+		}
+		if (count || busy || now - last_event < 100) {
+			ua_sleep(2, 1);
+		} else if (open) {
+			ua_sleep(10, 5);
+		} else {
+			ua_sleep(25, 15);
+		}
 	}
 }
 
@@ -1999,7 +2164,20 @@ sweet_usb_gadget_start(vm_offset_t dwc)
 	if (ud_acm) {
 		lck_grp_t *grp = lck_grp_alloc_init("zeus-acm", LCK_GRP_ATTR_NULL);
 		ud.lock = lck_mtx_alloc_init(grp, LCK_ATTR_NULL);
-		printf("SWEET USB: CDC ACM mode (zeusacm=1): kernel log on a USB serial port, no USB Ethernet\n");
+		vm_offset_t va = 0;
+		if (ud_dma_uncached || smmu_mode != 0 ||
+		    kmem_alloc_contig(kernel_map, &va, UA_BUF_SIZE, PAGE_MASK, 0, 0,
+		    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+			printf("SWEET USB: CDC ACM needs kernel DMA memory with the SMMU in bypass (no sweetusbdma/sweetusbsmmu)\n");
+			return;
+		}
+		ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)va);
+		if (!pn) {
+			return;
+		}
+		ua_va = va;
+		ua_pa = ptoa_64(pn);
+		printf("SWEET USB: CDC ACM mode (zeusacm=1): kernel log on a USB serial port, buffer 0x%llx\n", ua_pa);
 	} else {
 		ud_if_create();
 	}
@@ -2069,13 +2247,10 @@ sweet_usb_gadget_start(vm_offset_t dwc)
 		delay(1000);
 	}
 	printf("SWEET USB: running (DSTS 0x%08x after %d ms), DMA at 0x%llx\n", dwc_rd(DSTS), i, ud.dma_pa);
-	if (kernel_thread_start(ud_thread, NULL, &thread) == KERN_SUCCESS) {
+	if (kernel_thread_start(ud_acm ? ua_thread : ud_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
 	}
 	if (ud.ifp != NULL && kernel_thread_start(ud_ip_thread, NULL, &thread) == KERN_SUCCESS) {
-		thread_deallocate(thread);
-	}
-	if (ud_acm && kernel_thread_start(ud_acm_log_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
 	}
 	int livelog = 1;

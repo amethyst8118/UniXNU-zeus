@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c	2026-11-21 15:45:30
 +++ b/bsd/kern/kern_exec.c	2026-11-21 15:45:30
-@@ -8951,8 +8951,184 @@
+@@ -8951,8 +8951,203 @@
  	}
  	zeus_migration_rerun_status = error;
  	printf("zeus-data: migration marker removal %d\n", error);
@@ -182,10 +182,29 @@
 +	printf("zeus-data: migration marker %d (0 written, 1 already the same)\n", zeus_migration_done_status);
 +}
 +
++/*
++ * zeus: /System/Cryptexes/OS for LaunchServices. On 23F84 the root volume's entries for OS cryptex content are links into
++ * /System/Cryptexes/OS (-> /private/preboot/Cryptexes/OS), which leads nowhere on zeus: lsd fails to register what lies behind it
++ * ("Error -10813 registering path /System/Library/CoreServices/MobileCoreTypes.bundle") and SpringBoard aborts in
++ * -[SBApplicationController init] on a nil record of its own (display2, union2: the same 32 frames). UniXNU's native_cryptex_os_view
++ * makes the path; in this tree it runs only under gpu-addon=1, so with boot-arg cryptex-os=1 it runs here, before lsd starts.
++ */
++static void
++zeus_cryptex_os_view(proc_t p, user_addr_t scratch)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("cryptex-os", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	native_cryptex_os_view(p, scratch);
++	printf("zeus-apps: cryptex OS view stage %d status %d (5 = WebKit extension visible)\n", native_cryptex_os_stage,
++	    native_cryptex_os_status);
++}
++
  static int
  native_owner_data_prepare(proc_t p, user_addr_t scratch)
  {
-@@ -8996,6 +9172,8 @@
+@@ -8996,6 +9191,8 @@
  	    (error = copyout("/private/var", request.path, 13)) ||
  	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
  	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
@@ -194,11 +213,12 @@
  	native_owner_data_stage = 2;
  	error = mount(p, &request, &result);
  	if (error) goto done;
-@@ -9012,6 +9190,8 @@
+@@ -9012,6 +9209,9 @@
  	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
  	if (!error) native_owner_data_stage = 4;
  	if (!error) zeus_migration_rerun(p, scratch);
 +	if (!error) zeus_migration_done();
++	if (!error) zeus_cryptex_os_view(p, scratch);
 +	if (!error) zeus_ls_store_drop(p, scratch);
  	if (!error) native_gpu_addon_prepare(p, scratch);
  	if (!error) native_staged_apps_prepare(p, scratch, data_mount);

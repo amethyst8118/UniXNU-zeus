@@ -1,5 +1,7 @@
-# iOS 26.5.2 (23F84) bring-up, milestone 1: kernel, UFS root, Data, launchd. Display and GPU come back once the
-# 23F84 IOMobileFramebufferLegacy and IOAcceleratorES records exist (docs/PLAN-IOS26.md in the workspace).
+# iOS 26.5.2 (23F84) bring-up. Milestone 1 (kernel, UFS root, Data, launchd) reached 2026-11-21. Display: the owned GOP
+# backend bound to the original IOMobileFramebufferLegacy through scripts/legacy-display-23F84-d94ap.json. GPU comes back
+# once the 23F84 IOAcceleratorES records exist (docs/PLAN-IOS26.md in the workspace).
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
 CONFIG_XNU_BUILD_ARCHIVES=y
 CONFIG_XNU_CRYPTO_BOOTSTRAP="source"
 CONFIG_XNU_DT_PANIC_REGION=y

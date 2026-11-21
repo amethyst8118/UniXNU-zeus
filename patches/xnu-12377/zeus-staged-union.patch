@@ -1,5 +1,5 @@
---- a/bsd/kern/kern_exec.c	2026-11-21 15:24:24
-+++ b/bsd/kern/kern_exec.c	2026-11-21 15:24:24
+--- a/bsd/kern/kern_exec.c	2026-11-21 15:45:30
++++ b/bsd/kern/kern_exec.c	2026-11-21 15:45:30
 @@ -8951,8 +8951,184 @@
  	}
  	zeus_migration_rerun_status = error;
@@ -142,7 +142,9 @@
 +	printf("zeus-apps: LaunchServices database drop %d (removed*1000 + containers)\n", zeus_ls_store_status);
  }
  
-+/* Status: 0 written, 1 already there, -1 not asked, else the error. */
++/* Always the seed's contents: an earlier migration run leaves a plist of its own without LastSystemVersion ("System build version
++ * changed from (null) to 23F84. Migration necessary."), so a file that is merely present is not enough.
++ * Status: 0 written, 1 already the same, -1 not asked, else the error. */
 +volatile int zeus_migration_done_status = -1;
 +static void
 +zeus_migration_done(void)
@@ -163,12 +165,10 @@
 +	}
 +	vfs_context_t ctx = vfs_context_current();
 +	vnode_t vp = NULLVP;
-+	int error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx);
-+	if (!error) {
-+		vnode_put(vp);
++	int error = native_gpu_addon_write(path, (const uint8_t *)plist, sizeof(plist) - 1, 0600, ctx);
++	if (error == -1) {
 +		zeus_migration_done_status = 1;
 +	} else {
-+		error = native_gpu_addon_write(path, (const uint8_t *)plist, sizeof(plist) - 1, 0600, ctx);
 +		if (!error && !(error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx))) {
 +			struct vnode_attr va;
 +			VATTR_INIT(&va);
@@ -179,7 +179,7 @@
 +		}
 +		zeus_migration_done_status = error;
 +	}
-+	printf("zeus-data: migration marker %d (0 written, 1 present)\n", zeus_migration_done_status);
++	printf("zeus-data: migration marker %d (0 written, 1 already the same)\n", zeus_migration_done_status);
 +}
 +
  static int

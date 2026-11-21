@@ -1,0 +1,65 @@
+--- a/bsd/vfs/vfs_attrlist.c
++++ b/bsd/vfs/vfs_attrlist.c
+@@ -1720,6 +1720,21 @@
+ 		    ulmin((uint32_t)bufferSize, (uint32_t)ab.needed));
+ 	} else {
+ 		bcopy(ab.base, (void *)attributeBuffer, (size_t)ulmin((uint32_t)bufferSize, (uint32_t)ab.needed));
++	}
++
++	if (alp->volattr & ATTR_VOL_CAPABILITIES) {
++		static int zeus_vol_log_count = 0;
++		if (zeus_vol_log_count < 40) {
++			zeus_vol_log_count++;
++			printf("zeus-volattr: comm='%s' mnton='%s' mntfrom='%s' fsid=%u,%u fl=0x%x volattr=0x%x act=0x%x err=%d\n",
++			       vfs_context_proc(ctx)->p_comm,
++			       mnt ? mnt->mnt_vfsstat.f_mntonname : "?",
++			       mnt ? mnt->mnt_vfsstat.f_mntfromname : "?",
++			       mnt ? (unsigned)mnt->mnt_vfsstat.f_fsid.val[0] : 0,
++			       mnt ? (unsigned)mnt->mnt_vfsstat.f_fsid.val[1] : 0,
++			       mnt ? (unsigned)mnt->mnt_flag : 0,
++			       (unsigned)alp->volattr, (unsigned)ab.actual.volattr, error);
++		}
+ 	}
+ 
+ out:
+@@ -3111,6 +3126,40 @@
+ 		goto out;
+ 	}
+ 
++	if (alp->commonattr & (ATTR_CMN_DEVID | ATTR_CMN_FSID)) {
++		const char *pname = pathbuf ? pathbuf : (vp && vp->v_name ? vp->v_name : "");
++		if (pname[0] && (strstr(pname, "CoreServices") || strstr(pname, "SpringBoard") ||
++		    strstr(pname, "MobileCoreTypes") || strstr(pname, "Applications"))) {
++			static int zeus_attr_log_count = 0;
++			if (zeus_attr_log_count < 100) {
++				zeus_attr_log_count++;
++				mount_t vpm = vp ? vp->v_mount : NULL;
++				mount_t covm = (vpm && vpm->mnt_vnodecovered) ? vpm->mnt_vnodecovered->v_mount : NULL;
++				mount_t rootm = rootvnode ? rootvnode->v_mount : NULL;
++				printf("zeus-getattrlist: p='%s' vn='%s' comm='%s' cmn=0x%x act=0x%x "
++				       "va_fsid=%u va_fsid64=(%u,%u) "
++				       "vpm=(%p,'%s',fsid=%u,%u,fl=0x%x) "
++				       "covm=(%p,'%s',fsid=%u,%u) "
++				       "rootm=(%p,fsid=%u,%u)\n",
++				       pname, vp && vp->v_name ? vp->v_name : "?",
++				       vfs_context_proc(ctx)->p_comm, (unsigned)alp->commonattr, (unsigned)ab.actual.commonattr,
++				       (VATTR_IS_ACTIVE(vap, va_fsid) && VATTR_IS_SUPPORTED(vap, va_fsid)) ? (unsigned)vap->va_fsid : 0,
++				       VATTR_IS_SUPPORTED(vap, va_fsid64) ? (unsigned)vap->va_fsid64.val[0] : 0,
++				       VATTR_IS_SUPPORTED(vap, va_fsid64) ? (unsigned)vap->va_fsid64.val[1] : 0,
++				       vpm, vpm ? vpm->mnt_vfsstat.f_mntonname : "?",
++				       vpm ? (unsigned)vpm->mnt_vfsstat.f_fsid.val[0] : 0,
++				       vpm ? (unsigned)vpm->mnt_vfsstat.f_fsid.val[1] : 0,
++				       vpm ? (unsigned)vpm->mnt_flag : 0,
++				       covm, covm ? covm->mnt_vfsstat.f_mntonname : "?",
++				       covm ? (unsigned)covm->mnt_vfsstat.f_fsid.val[0] : 0,
++				       covm ? (unsigned)covm->mnt_vfsstat.f_fsid.val[1] : 0,
++				       rootm,
++				       rootm ? (unsigned)rootm->mnt_vfsstat.f_fsid.val[0] : 0,
++				       rootm ? (unsigned)rootm->mnt_vfsstat.f_fsid.val[1] : 0);
++			}
++		}
++	}
++
+ 	/* diagnostic */
+ 	if (!return_valid && (ab.fixedcursor - ab.base) != fixedsize) {
+ 		panic("packed field size mismatch; allocated %ld but packed %ld for common %08x vol %08x",

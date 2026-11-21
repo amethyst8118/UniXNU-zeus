@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c	2026-11-21 15:45:30
 +++ b/bsd/kern/kern_exec.c	2026-11-21 15:45:30
-@@ -8951,8 +8951,251 @@
+@@ -8951,8 +8951,298 @@
  	}
  	zeus_migration_rerun_status = error;
  	printf("zeus-data: migration marker removal %d\n", error);
@@ -249,10 +249,57 @@
 +}
 +#endif
 +
++/*
++ * zeus: keep the debug-level unified log of the subsystems that decide SpringBoard's own LaunchServices record. Only default-level
++ * messages are persisted otherwise, and none of them says why -[FBSApplicationLibrary _workQueue_currentProcessProxyWithOutURL:]
++ * finds no valid record for com.apple.springboard inside SpringBoard. The root's /Library/Preferences is a link to
++ * ../private/var/preferences, and the Data store already has preferences/Logging/Subsystems (empty): with boot-arg zeus-logprof=1
++ * one profile per subsystem is written there before launchd starts (logd and every client read them at start-up).
++ * Status: number of profiles written or already the same, or the last error (negative).
++ */
++volatile int zeus_logprof_status = -1;
++static void
++zeus_log_profiles(void)
++{
++	static const char *const subsystems[] = {
++		"com.apple.launchservices", "com.apple.frontboard.ApplicationLibrary", "com.apple.FrontBoard", "com.apple.UserManagement",
++		"com.apple.SpringBoard", "com.apple.installcoordination", "com.apple.containermanager",
++	};
++	static const char plist[] =
++	    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
++	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
++	    "<plist version=\"1.0\">\n<dict>\n"
++	    "\t<key>DEFAULT-OPTIONS</key>\n\t<dict>\n"
++	    "\t\t<key>Enable-Private-Data</key>\n\t\t<true/>\n"
++	    "\t\t<key>Level</key>\n\t\t<dict>\n"
++	    "\t\t\t<key>Enable</key>\n\t\t\t<string>Debug</string>\n"
++	    "\t\t\t<key>Persist</key>\n\t\t\t<string>Debug</string>\n"
++	    "\t\t</dict>\n\t</dict>\n"
++	    "</dict>\n</plist>\n";
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("zeus-logprof", &enabled, sizeof(enabled)) || enabled != 1) {
++		return;
++	}
++	vfs_context_t ctx = vfs_context_current();
++	char path[160];
++	int done = 0, last = 0;
++	for (size_t i = 0; i < sizeof(subsystems) / sizeof(subsystems[0]); ++i) {
++		snprintf(path, sizeof(path), "/private/var/preferences/Logging/Subsystems/%s.plist", subsystems[i]);
++		int error = native_gpu_addon_write(path, (const uint8_t *)plist, sizeof(plist) - 1, 0644, ctx);
++		if (error == 0 || error == -1) {
++			done++;
++		} else {
++			last = error;
++		}
++	}
++	zeus_logprof_status = last ? -last : done;
++	printf("zeus-logprof: debug log profiles %d (count written or same, negative = last error)\n", zeus_logprof_status);
++}
++
  static int
  native_owner_data_prepare(proc_t p, user_addr_t scratch)
  {
-@@ -8996,6 +9239,8 @@
+@@ -8996,6 +9286,8 @@
  	    (error = copyout("/private/var", request.path, 13)) ||
  	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
  	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
@@ -261,7 +308,7 @@
  	native_owner_data_stage = 2;
  	error = mount(p, &request, &result);
  	if (error) goto done;
-@@ -9012,6 +9257,10 @@
+@@ -9012,6 +9304,11 @@
  	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
  	if (!error) native_owner_data_stage = 4;
  	if (!error) zeus_migration_rerun(p, scratch);
@@ -269,6 +316,7 @@
 +	if (!error) zeus_cryptex_os_view(p, scratch);
 +	if (!error) zeus_ls_store_drop(p, scratch);
 +	if (!error) zeus_persona_bootstrap();
++	if (!error) zeus_log_profiles();
  	if (!error) native_gpu_addon_prepare(p, scratch);
  	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
  done:

@@ -13,4 +13,5 @@ zeus-pmap-extra-dram.patch
 gpupool-device-pager-close.patch
 zeus-launchd-cache-overlay.patch
 zeus-staged-union.patch
+zeus-union-identity.patch
 zeus-getattrlist-diag.patch

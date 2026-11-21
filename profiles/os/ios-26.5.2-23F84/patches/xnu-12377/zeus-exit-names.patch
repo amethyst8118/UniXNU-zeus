@@ -37,7 +37,7 @@
  }
  
  void
-@@ -2408,6 +2438,16 @@
+@@ -2408,6 +2438,15 @@
  	}
  
  	p->p_lflag |= P_LPEXIT;
@@ -45,8 +45,7 @@
 +		static uint32_t zeus_exit_lines;
 +		if (os_atomic_inc_orig(&zeus_exit_lines, relaxed) < 400) {
 +			os_reason_t r = p->p_exit_reason;
-+			printf("zeus-exit: %s[%d] xstat 0x%x reason ns %u code 0x%llx
-+", p->p_comm, proc_getpid(p),
++			printf("zeus-exit: %s[%d] xstat 0x%x reason ns %u code 0x%llx\n", p->p_comm, proc_getpid(p),
 +			    (unsigned)p->p_xstat, r != OS_REASON_NULL ? r->osr_namespace : 0,
 +			    r != OS_REASON_NULL ? (unsigned long long)r->osr_code : 0ULL);
 +		}

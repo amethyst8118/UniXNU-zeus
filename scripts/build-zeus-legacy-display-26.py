@@ -434,6 +434,9 @@ void sheng_gpu_pool_probe(void) {}
 void sheng_gpu_power_probe(void) {}
 void sheng_usb_probe(void) {}
 void zeus_usbeth_probe(void) {}
+// GPU trace (build-zeus-adreno.py defines these on 27): off, nothing recorded.
+int native_gpu_trace_enabled(void) {return 0;}
+void native_gpu_trace_record(uint32_t,uint32_t,const uint64_t *,uint32_t) {}
 // iOS 26: no Adreno driver is linked yet.
 IOService *native_adreno_published_service() {return nullptr;}
 bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *detail) {

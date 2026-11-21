@@ -1,5 +1,5 @@
 diff --git a/bsd/vfs/vfs_attrlist.c b/bsd/vfs/vfs_attrlist.c
-index de5e05a..36ae8cc 100644
+index f83e29b..5890b90 100644
 --- a/bsd/vfs/vfs_attrlist.c
 +++ b/bsd/vfs/vfs_attrlist.c
 @@ -237,6 +237,10 @@ attrlist_pack_variable(struct _attrlist_buf *ab, const void *source, ssize_t cou
@@ -13,6 +13,15 @@ index de5e05a..36ae8cc 100644
  /*
   * Attempt to pack a string. This is a special case of a variable width attribute.
   *
+@@ -1015,7 +1019,7 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
+ 	vs.f_vol_name = NULL;
+ 	attr_max_buffer = proc_support_long_paths(vfs_context_proc(ctx)) ?
+ 	    ATTR_MAX_BUFFER_LONGPATHS : ATTR_MAX_BUFFER;
+-	mnt = vp->v_mount;
++	mnt = native_union_identity(vp->v_mount);
+ 
+ 	/* Check for invalid or dead mounts. */
+ 	if (!mnt || mnt == dead_mountp) {
 @@ -1769,6 +1773,12 @@ attr_pack_common(vfs_context_t ctx, mount_t mp, vnode_t vp, struct attrlist *alp
  			ATTR_PACK4((*abp),
  			    mp->mnt_vfsstat.f_fsid.val[0]);
@@ -39,36 +48,37 @@ index de5e05a..36ae8cc 100644
  			ATTR_PACK8((*abp), vap->va_fsid64);
  			abp->actual.commonattr |= ATTR_CMN_FSID;
 diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
-index 5b038ca..996b52d 100644
+index 5b038ca..e0fc644 100644
 --- a/bsd/vfs/vfs_subr.c
 +++ b/bsd/vfs/vfs_subr.c
-@@ -13504,3 +13504,24 @@ vnode_isappendonly(vnode_t vp)
+@@ -13504,3 +13504,25 @@ vnode_isappendonly(vnode_t vp)
  {
  	return os_atomic_load(&vp->v_ext_flag, relaxed) & VE_APPENDONLY;
  }
 +
 +#if 1
 +/*
-+ * The volume macOS sees at "/". The owner chain union-mounts the SystemOS volume over the root volume's "/", so files
-+ * there come from two APFS volumes with two device ids, and getfsstat lists two mounts on "/". macOS CoreServices
-+ * (FileIDTree) identifies a volume by its device id and aborts on a second volume with the same one or on a device id
-+ * no mount lists. As macOS-DroidVM's virt_union_top does, the root volume under the union is reported as the union:
-+ * getfsstat leaves the root volume out and stat, statfs and getattrlist give the SystemOS volume's device id and statfs,
-+ * which keeps MNT_UNION, so libc's opendir reads a directory of both layers whole and drops the duplicate names.
++ * The canonical volume seen at "/". The owner chain union-mounts the SystemOS volume over the root volume's "/",
++ * so files under "/" come from two APFS volumes with two device ids, and getfsstat lists two mounts on "/".
++ * Apple CoreServices (LaunchServices / FileIDTree / _MountInfoPrepare) identifies a volume by its device id and
++ * aborts if a file's device id does not match any mount in getmntinfo64(). To unify the root volume at "/":
++ * - The SystemOS union layer is reported as the underlying root volume.
++ * - getfsstat skips the union layer so getmntinfo lists only the root volume at "/".
++ * - stat, statfs, and getattrlist for files on the union layer report the root volume's device id and fsid.
 + */
 +mount_t
 +native_union_identity(mount_t mp)
 +{
-+	mount_t top = rootvnode != NULLVP ? rootvnode->v_mount : NULL;
-+	if (mp != NULL && top != NULL && top != mp && (top->mnt_flag & MNT_UNION) && top->mnt_vnodecovered != NULLVP &&
-+	    top->mnt_vnodecovered->v_mount == mp && (mp->mnt_flag & MNT_ROOTFS)) {
-+		return top;
++	if (mp != NULL && (mp->mnt_flag & MNT_UNION) && mp->mnt_vnodecovered != NULLVP &&
++	    (mp->mnt_vnodecovered == rootvnode || (mp->mnt_vnodecovered->v_flag & VROOT)) &&
++	    mp->mnt_vnodecovered->v_mount != NULL && (mp->mnt_vnodecovered->v_mount->mnt_flag & MNT_ROOTFS)) {
++		return mp->mnt_vnodecovered->v_mount;
 +	}
 +	return mp;
 +}
 +#endif
 diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
-index e9548ab..d91e7da 100644
+index 942dc24..376d154 100644
 --- a/bsd/vfs/vfs_syscalls.c
 +++ b/bsd/vfs/vfs_syscalls.c
 @@ -3748,6 +3748,13 @@ statfs_internal(proc_t p, struct mount *mp, user_addr_t bufp)
@@ -85,15 +95,6 @@ index e9548ab..d91e7da 100644
  /* ARGSUSED */
  int
  statfs(proc_t p, struct statfs_args *uap, __unused int32_t *retval)
-@@ -3765,7 +3772,7 @@ statfs(proc_t p, struct statfs_args *uap, __unused int32_t *retval)
- 		return error;
- 	}
- 	vp = nd.ni_vp;
--	mp = vp->v_mount;
-+	mp = NATIVE_UNION_IDENTITY(vp->v_mount);
- 	nameidone(&nd);
- 
- 	error = statfs_internal(p, mp, uap->buf);
 @@ -3794,7 +3801,7 @@ fstatfs(proc_t p, struct fstatfs_args *uap, __unused int32_t *retval)
  
  	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
@@ -103,16 +104,20 @@ index e9548ab..d91e7da 100644
  	if (!mp) {
  		error = EBADF;
  		goto out_vnode;
-@@ -3833,7 +3840,7 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
- 	 * BSPathExistsOnSystemPartition compares this number for /System with the one for a daemon's executable. Report one number.
- 	 * macOS reports the root volume as the union instead (macos-union-one-volume.patch, native_union_identity).
- 	 */
--#if !XNU_TARGET_OS_OSX
-+#if 0
- 	if ((mp->mnt_flag & MNT_UNION) && mp->mnt_vnodecovered != NULLVP && (mp->mnt_vnodecovered->v_flag & VROOT) &&
- 	    (mp->mnt_vnodecovered->v_mount->mnt_flag & MNT_ROOTFS)) {
- 		sfs->f_fsid = mp->mnt_vnodecovered->v_mount->mnt_vfsstat.f_fsid;
-@@ -3877,7 +3884,7 @@ statfs64(__unused struct proc *p, struct statfs64_args *uap, __unused int32_t *r
+@@ -3828,6 +3835,12 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
+ 	sfs->f_files = vsfs->f_files;
+ 	sfs->f_ffree = vsfs->f_ffree;
+ 	sfs->f_fsid = vsfs->f_fsid;
++#if 1
++	if ((mp->mnt_flag & MNT_UNION) && mp->mnt_vnodecovered != NULLVP && (mp->mnt_vnodecovered->v_flag & VROOT) &&
++	    (mp->mnt_vnodecovered->v_mount->mnt_flag & MNT_ROOTFS)) {
++		sfs->f_fsid = mp->mnt_vnodecovered->v_mount->mnt_vfsstat.f_fsid;
++	}
++#endif
+ 	sfs->f_owner = vsfs->f_owner;
+ 	sfs->f_type = mp->mnt_vtable->vfc_typenum;
+ 	sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
+@@ -3866,7 +3879,7 @@ statfs64(__unused struct proc *p, struct statfs64_args *uap, __unused int32_t *r
  		goto out;
  	}
  	vp = ndp->ni_vp;
@@ -121,7 +126,7 @@ index e9548ab..d91e7da 100644
  	nameidone(ndp);
  
  #if CONFIG_MACF
-@@ -3935,7 +3942,7 @@ fstatfs64(__unused struct proc *p, struct fstatfs64_args *uap, __unused int32_t
+@@ -3924,7 +3937,7 @@ fstatfs64(__unused struct proc *p, struct fstatfs64_args *uap, __unused int32_t
  
  	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
  
@@ -130,7 +135,7 @@ index e9548ab..d91e7da 100644
  	if (!mp) {
  		error = EBADF;
  		goto out;
-@@ -3985,6 +3992,10 @@ getfsstat_callback(mount_t mp, void * arg)
+@@ -3974,6 +3987,11 @@ getfsstat_callback(mount_t mp, void * arg)
  	int error, my_size;
  	vfs_context_t ctx = vfs_context_current();
  
@@ -138,10 +143,11 @@ index e9548ab..d91e7da 100644
 +	if (NATIVE_UNION_IDENTITY(mp) != mp) {
 +		return VFS_RETURNED;
 +	}
++
  	if (fstp->sfsp && fstp->count < fstp->maxcount) {
  #if CONFIG_MACF
  		error = mac_mount_check_stat(ctx, mp);
-@@ -4168,6 +4179,10 @@ getfsstat64_callback(mount_t mp, void * arg)
+@@ -4157,6 +4175,11 @@ getfsstat64_callback(mount_t mp, void * arg)
  	struct statfs64 sfs;
  	int error;
  
@@ -149,6 +155,7 @@ index e9548ab..d91e7da 100644
 +	if (NATIVE_UNION_IDENTITY(mp) != mp) {
 +		return VFS_RETURNED;
 +	}
++
  	if (fstp->sfsp && fstp->count < fstp->maxcount) {
  #if CONFIG_MACF
  		error = mac_mount_check_stat(vfs_context_current(), mp);

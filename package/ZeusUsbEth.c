@@ -529,9 +529,36 @@ static const uint8_t ud_cfg_desc[80] = {
 };
 /* The host side's MAC (ECM iMACAddress); the phone's own is ..:02 */
 static const char *const ud_strings[] = {
-	NULL, "ios-sweet", "Sweet iOS (USB Ethernet)", "0001", "02005E77EE01",
+	NULL, "ios-sweet", "Sweet iOS (USB Ethernet)", "0001", "02005E77EE01", "zeus kernel log",
 };
 static const uint8_t ud_phone_mac[ETHER_ADDR_LEN] = { 0x02, 0x00, 0x5e, 0x77, 0xee, 0x02 };
+
+/*
+ * zeus iOS 26, boot-arg zeusacm=1: the same gadget as a CDC ACM serial port (zeta's native USB log, UniXNU-zeta
+ * scripts/native-dwc3-console.c, redone on this driver's SM8450 bring-up). No ifnet, no IP: the bulk IN endpoint
+ * carries the kernel message buffer as raw text while the host has the port open (DTR set); each open replays the
+ * whole ring first. Windows binds usbser.sys (a COM port), Linux cdc_acm, macOS /dev/cu.usbmodem*.
+ * tools/scripts/zeus_acm_log.py captures it. Same endpoints as ECM: 0x82 interrupt, 0x81/0x01 bulk. PID 0x0002.
+ */
+static int ud_acm;
+static bool ud_acm_dtr;
+static const uint8_t ud_acm_dev_desc[18] = {   /* class 2 subclass 2: Windows' in-box usbser.inf matches it */
+	18, 1, 0x00, 0x02, 0x02, 0x02, 0x00, 64,
+	0x09, 0x12, 0x02, 0x00, 0x00, 0x01, 1, 5, 3, 1,
+};
+static const uint8_t ud_acm_cfg_desc[67] = {
+	9, 2, 67, 0, 2, 1, 0, 0x80, 250,                /* config: 2 interfaces, 500 mA */
+	9, 4, 0, 0, 1, 0x02, 0x02, 0x01, 0,             /* comm interface 0: CDC ACM, 1 endpoint */
+	5, 0x24, 0x00, 0x10, 0x01,                      /* header, CDC 1.10 */
+	5, 0x24, 0x01, 0x00, 1,                         /* call management: none, data interface 1 */
+	4, 0x24, 0x02, 0x02,                            /* ACM: line coding + control line state */
+	5, 0x24, 0x06, 0, 1,                            /* union: control 0, data 1 */
+	7, 5, 0x82, 0x03, 16, 0, 9,                     /* ep 0x82 interrupt IN */
+	9, 4, 1, 0, 2, 0x0a, 0x00, 0x00, 0,             /* data interface 1: two bulk endpoints */
+	7, 5, 0x81, 0x02, 0x00, 0x02, 0,                /* ep 0x81 bulk IN, 512 */
+	7, 5, 0x01, 0x02, 0x00, 0x02, 0,                /* ep 0x01 bulk OUT, 512 */
+};
+static const uint8_t ud_acm_line[7] = { 0x00, 0xc2, 0x01, 0x00, 0, 0, 8 };     /* 115200 8N1 (not used) */
 
 static uint32_t
 ud_string(unsigned idx, uint8_t *out)
@@ -643,6 +670,7 @@ ud_data_down(const char *why, bool link_off)
 	lck_mtx_lock(ud.lock);
 	bool was = ud.configured;
 	ud.configured = false;
+	ud_acm_dtr = false;
 	ud.data_up = false;
 	unsigned dropped = ud_eps_stop_locked(&ended);
 	lck_mtx_unlock(ud.lock);
@@ -680,14 +708,35 @@ ud_setup(void)
 
 	printf("SWEET USB: setup %02x %02x %04x %04x len %u\n", type, req, value, index, length);
 	ud.data_in = (type & 0x80) != 0;
-	if ((type & 0x60) == 0x20) {    /* class request (e.g. SET_ETHERNET_PACKET_FILTER) */
+	if ((type & 0x60) == 0x20 && ud_acm) {
+		if (req == 0x21) {              /* GET_LINE_CODING */
+			memcpy(data, ud_acm_line, sizeof(ud_acm_line)); n = sizeof(ud_acm_line);
+		} else if (req == 0x22) {       /* SET_CONTROL_LINE_STATE: bit 0 DTR = the host opened the port */
+			ud_acm_dtr = (value & 1) != 0;
+			printf("SWEET USB: acm DTR %d RTS %d\n", value & 1, (value >> 1) & 1);
+		} else {                        /* SET_LINE_CODING (data not used), SEND_BREAK, ... */
+			ok = (req == 0x20 || length == 0);
+		}
+	} else if ((type & 0x60) == 0x20) {    /* class request (e.g. SET_ETHERNET_PACKET_FILTER) */
 		ok = (length == 0);
 	} else if ((type & 0x60) != 0) {
 		ok = false;
 	} else if (req == 6) {          /* GET_DESCRIPTOR */
 		switch (value >> 8) {
-		case 1: memcpy(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc); break;
-		case 2: memcpy(data, ud_cfg_desc, sizeof(ud_cfg_desc)); n = sizeof(ud_cfg_desc); break;
+		case 1:
+			if (ud_acm) {
+				memcpy(data, ud_acm_dev_desc, sizeof(ud_acm_dev_desc)); n = sizeof(ud_acm_dev_desc);
+			} else {
+				memcpy(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc);
+			}
+			break;
+		case 2:
+			if (ud_acm) {
+				memcpy(data, ud_acm_cfg_desc, sizeof(ud_acm_cfg_desc)); n = sizeof(ud_acm_cfg_desc);
+			} else {
+				memcpy(data, ud_cfg_desc, sizeof(ud_cfg_desc)); n = sizeof(ud_cfg_desc);
+			}
+			break;
 		case 3: n = ud_string(value & 0xff, data); ok = n != 0; break;
 		default: ok = false; break;
 		}
@@ -704,6 +753,10 @@ ud_setup(void)
 		}
 		if (value == 1) {
 			ud_configure();
+			if (ud_acm && ud.configured) {
+				ud.data_alt = 1;        /* ACM data interface has no alternate setting: up now (watchdog) */
+				ud.data_up = true;
+			}
 		}
 		printf("SWEET USB: configured (%u)\n", value);
 	} else if (req == 8) {          /* GET_CONFIGURATION */
@@ -1512,6 +1565,53 @@ static uint32_t sweet_log_copy(uint64_t *pos, char *out, uint32_t max)
 	return n;
 }
 
+/*
+ * zeusacm=1: the kernel log as raw bytes on bulk IN, one transfer of up to 2 KiB from UD_TX at a time, only while
+ * the host has the port open (DTR); each open replays the ring. A transfer of a multiple of 512 bytes would need
+ * a zero-length packet to end it, so it is cut one byte short.
+ */
+static void
+ud_acm_log_thread(void *arg __unused, wait_result_t wr __unused)
+{
+	uint64_t pos = 0;
+	bool open = false;
+	for (;;) {
+		ud_sleep_ms(20);
+		lck_mtx_lock(ud.lock);
+		if (!ud.configured || !ud_acm_dtr) {
+			open = false;
+			lck_mtx_unlock(ud.lock);
+			continue;
+		}
+		if (!open) {
+			uint64_t total = sweet_log_position();
+			uint64_t size = (msgbufp && msgbufp->msg_size > 0) ? (uint64_t)msgbufp->msg_size : 0;
+			open = true;
+			pos = total > size ? total - size : 0;
+		}
+		if (!ud.tx_busy) {
+			uint64_t start = pos;
+			uint32_t n = sweet_log_copy(&pos, (char *)(ud.dma + UD_TX), UD_FRAME_MAX);
+			if (n > 0 && (n % 512) == 0) {
+				n--;
+				pos--;
+			}
+			if (n > 0) {
+				ud.tx_busy = true;
+				ud_xact[EP_TX] = true;
+				ud.tx_frames++;
+				ud_tx_xfers++;
+				ud_tx_trb = ud.dma + UD_TRB_TX;
+				ud_tx_trb_pa = ud.dma_pa + UD_TRB_TX;
+				ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, n, TRBCTL_NORMAL);
+			} else {
+				pos = start;
+			}
+		}
+		lck_mtx_unlock(ud.lock);
+	}
+}
+
 static void
 ud_log_thread(void *arg __unused, wait_result_t wr __unused)
 {
@@ -1895,7 +1995,14 @@ sweet_usb_gadget_start(vm_offset_t dwc)
 	ud_poll_us = (pollus >= 50 && pollus <= 1000) ? pollus : 0;
 	printf("SWEET USB: fast path: txbatch %d (buffer %s at 0x%llx) poll_us %d (1045 defaults 16/100); recover %d\n", ud_txbatch,
 	    ud_txb_va ? "ok" : "none", ud_txb_pa, ud_poll_us, ud_recover);
-	ud_if_create();
+	PE_parse_boot_argn("zeusacm", &ud_acm, sizeof(ud_acm));
+	if (ud_acm) {
+		lck_grp_t *grp = lck_grp_alloc_init("zeus-acm", LCK_GRP_ATTR_NULL);
+		ud.lock = lck_mtx_alloc_init(grp, LCK_ATTR_NULL);
+		printf("SWEET USB: CDC ACM mode (zeusacm=1): kernel log on a USB serial port, no USB Ethernet\n");
+	} else {
+		ud_if_create();
+	}
 	if (ud_smmu_setup(ud.dma_pa) != 0) {
 		printf("SWEET USB: SMMU setup failed; not starting the device\n");
 		return;
@@ -1966,6 +2073,9 @@ sweet_usb_gadget_start(vm_offset_t dwc)
 		thread_deallocate(thread);
 	}
 	if (ud.ifp != NULL && kernel_thread_start(ud_ip_thread, NULL, &thread) == KERN_SUCCESS) {
+		thread_deallocate(thread);
+	}
+	if (ud_acm && kernel_thread_start(ud_acm_log_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
 	}
 	int livelog = 1;

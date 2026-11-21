@@ -398,6 +398,11 @@ compile_cpp(keystore_source, OUT / 'KeyStoreProbe.o')
 compile_cpp(ROOT / 'kits/sheng/CpuFreqProbe.cpp', OUT / 'CpuFreqProbe.o')
 # Display controller timing (sheng DisplayTimingProbe): sheng_dpu_probe, dpu=<1..3>; [dpu] rows in BootLog with log-display=1.
 compile_cpp(ROOT / 'kits/sheng/DisplayTimingProbe.cpp', OUT / 'DisplayTimingProbe.o')
+# zeus USB debug channel (ZeusUsbEth.c): its own DWC3 gadget, no Apple USB classes, so no 23F84 fixture is needed.
+# zeus-usbeth=2 starts it; zeusacm=1 makes it a CDC ACM serial port carrying the kernel log (zeta's USB log idea)
+# instead of USB Ethernet + UDP. BSD net recipe for the ifnet/mbuf/socket KPIs.
+compile_c(ROOT / 'kits/sheng/ZeusUsbEth.c', OUT / 'ZeusUsbEth.o', recipe='bsd/DEVELOPMENT/dlil.o.json',
+          extra=['-Wno-unknown-warning-option'])
 print(run(['python3', ROOT / 'scripts/build-arm-driver.py', 'NativeKeyStoreEvents'], text=True), end='')
 keyevents = ROOT / 'build/apple-key-store-state'
 keyevents_late = keyevents / 'NativeKeyStoreEvents.late.o'
@@ -425,7 +430,7 @@ void sheng_audio_probe(void) {}
 void sheng_backlight_probe(void) {}
 void aston_boot_screen_probe(void) {}
 // While no GPU is published every frame is already written when its swap arrives (submitted == retired).
-// iOS 26: HID, touch, buttons, USB, USB Ethernet and GPU are not built yet (they need 23F84 class fixtures); their probes,
+// iOS 26: HID, touch, buttons, Apple USB and GPU are not built yet (they need 23F84 class fixtures); their probes,
 // called by native_legacy_display_late_probe, start nothing.
 void native_hid_input_probe(void) {}
 void native_touch_probe(void) {}
@@ -433,7 +438,6 @@ void sheng_buttons_probe(void) {}
 void sheng_gpu_pool_probe(void) {}
 void sheng_gpu_power_probe(void) {}
 void sheng_usb_probe(void) {}
-void zeus_usbeth_probe(void) {}
 // GPU trace (build-zeus-adreno.py defines these on 27): off, nothing recorded.
 int native_gpu_trace_enabled(void) {return 0;}
 void native_gpu_trace_record(uint32_t,uint32_t,const uint64_t *,uint32_t) {}
@@ -453,7 +457,7 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late,
-     OUT / 'CpuFreqProbe.o', OUT / 'DisplayTimingProbe.o'])
+     OUT / 'CpuFreqProbe.o', OUT / 'DisplayTimingProbe.o', OUT / 'ZeusUsbEth.o'])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source]

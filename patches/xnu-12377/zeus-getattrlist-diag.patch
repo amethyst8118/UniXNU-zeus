@@ -28,8 +28,8 @@
  
 +	if (alp->commonattr & (ATTR_CMN_DEVID | ATTR_CMN_FSID)) {
 +		const char *pname = pathbuf ? pathbuf : (vp && vp->v_name ? vp->v_name : "");
-+		if (pname[0] && (strstr(pname, "CoreServices") || strstr(pname, "SpringBoard") ||
-+		    strstr(pname, "MobileCoreTypes") || strstr(pname, "Applications"))) {
++		if (pname[0] && (strnstr(pname, "CoreServices", 1024) || strnstr(pname, "SpringBoard", 1024) ||
++		    strnstr(pname, "MobileCoreTypes", 1024) || strnstr(pname, "Applications", 1024))) {
 +			static int zeus_attr_log_count = 0;
 +			if (zeus_attr_log_count < 100) {
 +				zeus_attr_log_count++;

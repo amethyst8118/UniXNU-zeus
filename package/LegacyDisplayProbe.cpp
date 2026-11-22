@@ -533,7 +533,7 @@ class IONetworkStack : public IOService {
  public:
   bool start(IOService *provider) APPLE_KEXT_OVERRIDE {
     if (!IOService::start(provider)) return false;
-    setProperty(kIOUserClientClassKey, "IONetworkStackUserClient");
+    setProperty("IOUserClientClass", "IONetworkStackUserClient");
     return true;
   }
   IOReturn newUserClient(task_t task, void *security, UInt32 type, OSDictionary *, IOUserClient **handler) APPLE_KEXT_OVERRIDE {

@@ -104,19 +104,6 @@ index 942dc24..376d154 100644
  	if (!mp) {
  		error = EBADF;
  		goto out_vnode;
-@@ -3828,6 +3835,12 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
- 	sfs->f_files = vsfs->f_files;
- 	sfs->f_ffree = vsfs->f_ffree;
- 	sfs->f_fsid = vsfs->f_fsid;
-+#if 1
-+	if ((mp->mnt_flag & MNT_UNION) && mp->mnt_vnodecovered != NULLVP && (mp->mnt_vnodecovered->v_flag & VROOT) &&
-+	    (mp->mnt_vnodecovered->v_mount->mnt_flag & MNT_ROOTFS)) {
-+		sfs->f_fsid = mp->mnt_vnodecovered->v_mount->mnt_vfsstat.f_fsid;
-+	}
-+#endif
- 	sfs->f_owner = vsfs->f_owner;
- 	sfs->f_type = mp->mnt_vtable->vfc_typenum;
- 	sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
 @@ -3866,7 +3879,7 @@ statfs64(__unused struct proc *p, struct statfs64_args *uap, __unused int32_t *r
  		goto out;
  	}

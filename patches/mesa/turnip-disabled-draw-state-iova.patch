@@ -1,14 +1,16 @@
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index a729da1..6b405a5 100644
+index 60ad3a8..d5c14a7 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -1271,11 +1271,16 @@ tu_cs_emit_draw_state(struct tu_cs *cs, uint32_t id, struct tu_draw_state state)
+@@ -1268,11 +1268,16 @@ tu_cs_emit_draw_state(struct tu_cs *cs, uint32_t id, struct tu_draw_state state)
         state.writeable)
        enable_mask |= CP_SET_DRAW_STATE__0_DIRTY;
  
+-   tu_cs_emit(cs, CP_SET_DRAW_STATE__0_COUNT(state.size) |
+-                  enable_mask |
 +   const bool disabled = !state.size || !state.iova;
-    tu_cs_emit(cs, CP_SET_DRAW_STATE__0_COUNT(state.size) |
-                   enable_mask |
++   tu_cs_emit(cs, CP_SET_DRAW_STATE__0_COUNT(disabled ? 0 : state.size) |
++                  (disabled ? 0 : enable_mask) |
                    CP_SET_DRAW_STATE__0_GROUP_ID(id) |
 -                  COND(!state.size || !state.iova, CP_SET_DRAW_STATE__0_DISABLE));
 -   tu_cs_emit_qw(cs, state.iova);

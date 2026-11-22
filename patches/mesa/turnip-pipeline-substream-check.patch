@@ -1,0 +1,36 @@
+diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
+index dba43f9..cbaba11 100644
+--- a/src/freedreno/vulkan/tu_pipeline.cc
++++ b/src/freedreno/vulkan/tu_pipeline.cc
+@@ -2383,9 +2383,12 @@ tu_emit_program_state(struct tu_cs *sub_cs,
+     * consts are emitted in state groups that are shared between the binning
+     * and draw passes.
+     */
+-   tu_cs_begin_sub_stream(sub_cs, 512, &prog_cs);
+-   tu6_emit_program_config<CHIP>(&prog_cs, prog, shaders, variants);
+-   prog->config_state = tu_cs_end_draw_state(sub_cs, &prog_cs);
++   if (tu_cs_begin_sub_stream(sub_cs, 512, &prog_cs) == VK_SUCCESS) {
++      tu6_emit_program_config<CHIP>(&prog_cs, prog, shaders, variants);
++      prog->config_state = tu_cs_end_draw_state(sub_cs, &prog_cs);
++   } else {
++      prog->config_state = {};
++   }
+ 
+    prog->vs_state = draw_states[MESA_SHADER_VERTEX];
+ 
+@@ -2416,9 +2419,12 @@ tu_emit_program_state(struct tu_cs *sub_cs,
+    const struct ir3_shader_variant *gs = variants[MESA_SHADER_GEOMETRY];
+    const struct ir3_shader_variant *fs = variants[MESA_SHADER_FRAGMENT];
+ 
+-   tu_cs_begin_sub_stream(sub_cs, 512, &prog_cs);
+-   tu6_emit_vpc<CHIP>(&prog_cs, vs, hs, ds, gs, fs);
+-   prog->vpc_state = tu_cs_end_draw_state(sub_cs, &prog_cs);
++   if (tu_cs_begin_sub_stream(sub_cs, 512, &prog_cs) == VK_SUCCESS) {
++      tu6_emit_vpc<CHIP>(&prog_cs, vs, hs, ds, gs, fs);
++      prog->vpc_state = tu_cs_end_draw_state(sub_cs, &prog_cs);
++   } else {
++      prog->vpc_state = {};
++   }
+ 
+    const struct ir3_shader_variant *last_variant;
+    const struct tu_shader *last_shader;

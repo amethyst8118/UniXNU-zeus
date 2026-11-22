@@ -1,0 +1,96 @@
+diff --git a/src/vulkan/runtime/vk_device.c b/src/vulkan/runtime/vk_device.c
+--- a/src/vulkan/runtime/vk_device.c
++++ b/src/vulkan/runtime/vk_device.c
+@@ -22,6 +22,10 @@
+  */
+ 
+ #include "vk_device.h"
++#ifdef __APPLE__
++#include <os/log.h>
++#include <stdio.h>
++#endif
+ 
+ #include "vk_alloc.h"
+ #include "vk_common_entrypoints.h"
+@@ -438,6 +442,16 @@
+    va_start(ap, msg);
+    __vk_errorv(device, VK_ERROR_DEVICE_LOST, file, line, msg, ap);
+    va_end(ap);
++#ifdef __APPLE__
++   /* zeus: the reason reaches the unified log (stderr of a system daemon is never seen). */
++   {
++      char why[256];
++      va_start(ap, msg);
++      vsnprintf(why, sizeof why, msg, ap);
++      va_end(ap);
++      os_log_error(OS_LOG_DEFAULT, "zeus-vk device lost: %{public}s (%{public}s:%d)", why, file, line);
++   }
++#endif
+ 
+    vk_logd(VK_LOG_OBJS(device), "Timeline mode is %s.",
+            timeline_mode_str(device));
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -14,6 +14,7 @@
+ #include <unistd.h>
+ 
+ #include <IOKit/IOKitLib.h>
++#include <os/log.h>
+ #include <dispatch/dispatch.h>
+ #include <mach/mach.h>
+ 
+@@ -1480,6 +1481,9 @@
+    return n;
+ }
+ 
++/* zeus: submissions dropped after a kernel refusal (darwin_submit_chunk). */
++static uint32_t darwin_dropped_submits;
++
+ /* One kernel submission of up to NativeAdrenoAbiMaxBuffers indirect buffers; while the kernel's ring has no room (kIOReturnBusy, as msm
+  * waits for ring space) it waits for this client's oldest job, or yields when none is in flight. */
+ static VkResult
+@@ -1502,8 +1506,21 @@
+          *fence = (uint32_t)reply.fence;
+          return VK_SUCCESS;
+       }
+-      if (kr != kIOReturnBusy)
++      if (kr != kIOReturnBusy) {
++         /* zeus: a submission the kernel refuses for its arguments or for memory is dropped, not the device. Losing the device
++          * makes metal2vulkan recover onto a new VkDevice and refuse every pipeline made before it (MadeBeforeRecovery), and
++          * the render server never makes its pipelines again: one refusal ended all GPU drawing (gpum16, gpum17). */
++         os_log_error(OS_LOG_DEFAULT, "zeus-tu submit refused 0x%x: %u buffers, first %llx@%llx+%u last %llx@%llx+%u", kr, count,
++                      (unsigned long long)entries[0].handle, (unsigned long long)entries[0].iova, (unsigned)entries[0].bytes,
++                      (unsigned long long)entries[count - 1].handle, (unsigned long long)entries[count - 1].iova,
++                      (unsigned)entries[count - 1].bytes);
++         if (kr == kIOReturnBadArgument || kr == kIOReturnNoMemory || kr == kIOReturnNotPermitted || kr == kIOReturnTimeout) {
++            p_atomic_inc(&darwin_dropped_submits);
++            *fence = 0;
++            return VK_INCOMPLETE;
++         }
+          return vk_device_set_lost(&dev->vk, "submit failed: 0x%x", kr);
++      }
+       rec->busy++;
+ 
+       pthread_mutex_lock(&dw.lock);
+@@ -1577,6 +1594,8 @@
+          }
+          uint32_t chunk_fence = 0;
+          VkResult result = darwin_submit_chunk(queue, all + at, count, &chunk_fence, &rec);
++         if (result == VK_INCOMPLETE)
++            continue;   /* zeus: refused and dropped; the signals resolve with the last fence that ran */
+          if (result != VK_SUCCESS)
+             return result;
+          rec.chunks++;
+@@ -1586,7 +1605,10 @@
+          fence = chunk_fence;
+          tu_frame_event(38,(uintptr_t)submit,chunk_fence,at,count,rec.busy,rec.space_wait_us,wait_count,signal_count);
+       }
+-      p_atomic_set(&queue->fence, fence);
++      if (fence)
++         p_atomic_set(&queue->fence, fence);
++      else   /* zeus: every chunk was dropped: resolve with the last earlier submission */
++         fence = p_atomic_read(&queue->fence) > 0 ? (uint32_t)p_atomic_read(&queue->fence) : 0;
+       rec.buffers = MIN2(total, 255u);
+       if (inside)
+          rec.chunks |= 0x80;   /* a cut inside a command stream */

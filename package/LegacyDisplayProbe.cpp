@@ -517,6 +517,47 @@ extern void sheng_backlight_probe(void);
 extern "C" void sheng_dpu_probe(void);
 extern "C" void aston_boot_screen_probe(void);
 extern "C" void zeus_usbeth_probe(void) __attribute__((weak_import));   // USB Ethernet debug channel (ZeusUsbEth.c, zeus-usbeth=<n>)
+
+// InterfaceNamer in configd opens IONetworkStack to publish that IOKit is quiet (*QUIET*).
+// Without it, wait_for_IOKit_to_quiesce in Preferences/SystemConfiguration hangs for 300 s, causing watchdog exit kills.
+class IONetworkStackUserClient : public IOUserClient {
+  OSDeclareDefaultStructors(IONetworkStackUserClient);
+ public:
+  IOReturn setProperties(OSObject *) APPLE_KEXT_OVERRIDE { return kIOReturnSuccess; }
+  IOReturn clientClose() APPLE_KEXT_OVERRIDE { terminate(); return kIOReturnSuccess; }
+};
+OSDefineMetaClassAndStructors(IONetworkStackUserClient, IOUserClient);
+
+class IONetworkStack : public IOService {
+  OSDeclareDefaultStructors(IONetworkStack);
+ public:
+  bool start(IOService *provider) APPLE_KEXT_OVERRIDE {
+    if (!IOService::start(provider)) return false;
+    setProperty(kIOUserClientClassKey, "IONetworkStackUserClient");
+    return true;
+  }
+  IOReturn newUserClient(task_t task, void *security, UInt32 type, OSDictionary *, IOUserClient **handler) APPLE_KEXT_OVERRIDE {
+    IONetworkStackUserClient *client = OSTypeAlloc(IONetworkStackUserClient);
+    if (!client || !client->initWithTask(task, security, type)) { OSSafeReleaseNULL(client); return kIOReturnNoMemory; }
+    if (!client->attach(this)) { client->release(); return kIOReturnError; }
+    if (!client->start(this)) { client->detach(this); client->release(); return kIOReturnError; }
+    *handler = client; return kIOReturnSuccess;
+  }
+};
+OSDefineMetaClassAndStructors(IONetworkStack, IOService);
+
+static void publishNetworkStack(void) {
+  if (IOService *resources = IOService::getResourceService()) {
+    if (IONetworkStack *stack = OSTypeAlloc(IONetworkStack)) {
+      if (stack->init() && stack->attach(resources)) {
+        stack->setName("IONetworkStack");
+        if (stack->start(resources)) stack->registerService();
+        else { stack->detach(resources); stack->release(); }
+      } else OSSafeReleaseNULL(stack);
+    }
+  }
+}
+
 void native_legacy_display_late_probe(void) {
     aston_boot_screen_probe();  // first: the boot screen takes the framebuffer until iOS draws (AstonBootScreen.cpp)
     native_keystore_probe();
@@ -535,6 +576,7 @@ void native_legacy_display_late_probe(void) {
     sheng_backlight_probe();
     sheng_dpu_probe();
     native_hid_input_probe();
+    publishNetworkStack();
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
     OSDictionary *matching=IOService::nameMatching("IOCoreSurfaceRoot");

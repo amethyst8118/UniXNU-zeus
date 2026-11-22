@@ -144,7 +144,7 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 -	edge_config_defaults[PSET_AMP_P][PSET_AMP_E] = weighted_spill;
 -	/* E -> P; sheng: an idle P core may steal E work, as no controller moves thread groups */
 -	edge_config_defaults[PSET_AMP_E][PSET_AMP_P] = (sched_clutch_edge){.sce_migration_weight = 0, .sce_migration_allowed = 0, .sce_steal_allowed = 1};
-+	edge_config_defaults[PSET_AMP_P][PSET_AMP_E] = no_spill;
++	edge_config_defaults[PSET_AMP_P][PSET_AMP_E] = weighted_spill;
 +	/* E -> P */
 +	edge_config_defaults[PSET_AMP_E][PSET_AMP_P] = (sched_clutch_edge){.sce_migration_weight = weighted_spill.sce_migration_weight, .sce_migration_allowed = 0, .sce_steal_allowed = 1};
  #if HAS_MCORE

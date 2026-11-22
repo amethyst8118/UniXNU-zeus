@@ -1,8 +1,0 @@
---- a/NativeAdrenoMetalPlugin.mm
-+++ b/NativeAdrenoMetalPlugin.mm
-@@ -217,3 +217,5 @@
- static id clientDevice(unsigned port) {
-+    // iconservicesagent relies on shaders not in the runtime (_asgDownH); CPU fallback generates all icons cleanly
-+    if (!strcmp(getprogname(), "iconservicesagent")) return nil;
-     char turnip[1024];
-     if (!turnip::libraryPath(turnip, sizeof turnip) || access(turnip, R_OK) != 0) {clientFailure(port, "no-turnip", ""); return nil;}

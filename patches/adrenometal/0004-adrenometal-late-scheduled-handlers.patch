@@ -1,0 +1,25 @@
+--- a/NativeBridgeMetalFrontend.mm
++++ b/NativeBridgeMetalFrontend.mm
+@@ -3444,11 +3444,19 @@
+   NmbCommandBuffer *handle=_handle;_handle=nullptr;
+   nmb_command_buffer_release(handle);
+  }
+- NSArray *completedHandlers;
++ NSArray *completedHandlers,*lateScheduled=nil;
+  @synchronized(self){
+-  // A frontend refusal or a failed submission never scheduled. Unblock its waiter without inventing a scheduled event.
+-  if(!_schedulingDelivered){_schedulingDelivered=YES;[_scheduledHandlers removeAllObjects];dispatch_group_leave(_schedulingHandlers);}
++  // A frontend refusal or a failed submission never scheduled. Its scheduled handlers still run, once, before the completed ones:
++  // callers clear state in them. zeus 2026-11-22: RenderBox (RB::Device::will_submit_command_buffer) keeps the previous command
++  // buffer unretained at +0x410 and clears it from that buffer's scheduled handler; dropping the handler left a dangling pointer
++  // and SpringBoard died in objc_retain / an unrecognised waitUntilScheduled (gpum6/gpum7 crash reports).
++  if(!_schedulingDelivered){_schedulingDelivered=YES;lateScheduled=[_scheduledHandlers copy];[_scheduledHandlers removeAllObjects];}
++  else lateScheduled=nil;
+   completedHandlers=[_completedHandlers copy];[_completedHandlers removeAllObjects];
++ }
++ if(lateScheduled){
++  for(MTLCommandBufferHandler block in lateScheduled)block((id<MTLCommandBuffer>)self);
++  dispatch_group_leave(_schedulingHandlers);
+  }
+  if(!watched.empty()) {
+   // A command buffer refused before its commit never hashed its sources.

@@ -403,6 +403,30 @@ compile_cpp(ROOT / 'kits/sheng/ZeusTouchProbe.cpp', OUT / 'ZeusTouchProbe.o')
 # zeus power/volume buttons: sheng_buttons_probe (sheng-buttons=1) polls the PMK8350 PON and PM8350 GPIO 6 over SPMI and owns
 # native_buttons_set_sink, NativeHidInput's report-2 sink.
 compile_cpp(ROOT / 'kits/sheng/ZeusButtonProbe.cpp', OUT / 'ZeusButtonProbe.o')
+# GPU memory pool outside the kernel's window (sheng GpuMemoryPool, zeus allow-list): sheng_gpu_pool_probe.
+compile_cpp(ROOT / 'kits/sheng/GpuMemoryPool.cpp', OUT / 'GpuMemoryPool.o')
+# zeus GPU power probe (sheng GpuPowerProbe, SM8450 facts): sheng_gpu_power_probe, staged by gpu-power=<n>, default off.
+gpu_includes = [x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4') for x in ('-I', str(ROOT / d))]
+compile_cpp(ROOT / 'kits/sheng/ZeusGpuProbe.cpp', OUT / 'ZeusGpuProbe.o', gpu_includes)
+# The GPU objects keep their data out of the kernel's shared __DATA sections (see build-zeus-adreno.py).
+gpu_probe = bytearray((OUT / 'ZeusGpuProbe.o').read_bytes())
+for old_name, new_name in ((b'__common', b'__zadr_common'), (b'__bss', b'__zadr_bss'), (b'__data', b'__zadr_data'), (b'__const', b'__zadr_const')):
+    name = old_name.ljust(16, b'\0') + b'__DATA'.ljust(16, b'\0')
+    at = gpu_probe.find(name)
+    while at >= 0:
+        gpu_probe[at:at + 16] = new_name.ljust(16, b'\0')
+        at = gpu_probe.find(name, at + 32)
+(OUT / 'ZeusGpuProbe.o').write_bytes(gpu_probe)
+# The GPU firmware is private (never in this repository): embedded from ZEUS_GPU_FIRMWARE or ~/zeus-firmware when present, else empty.
+gpu_firmware_dir = Path(os.environ.get('ZEUS_GPU_FIRMWARE', Path.home() / 'zeus-firmware'))
+gpu_firmware_source = '#include <stddef.h>\n#include <stdint.h>\n'
+for symbol, name in (('zeus_gmu_firmware', 'gmu_gen70000.bin'), ('zeus_gpu_sqe', 'a730_sqe.fw'), ('zeus_gpu_zap_mdt', 'a730_zap.mdt'), ('zeus_gpu_zap_b01', 'a730_zap.b01')):
+    data = (gpu_firmware_dir / name).read_bytes() if (gpu_firmware_dir / name).is_file() else b''
+    gpu_firmware_source += f'const uint8_t {symbol}[] = {{' + (','.join(map(str, data)) or '0') + f'}};\nconst size_t {symbol}_size = {len(data)};\n'
+    print(f'zeus GPU firmware {name}: {len(data)} bytes')
+gmu_source = OUT / 'ZeusGpuFirmware.c'
+gmu_source.write_text(gpu_firmware_source)
+compile_c(gmu_source, OUT / 'ZeusGpuFirmware.o')
 # zeus USB debug channel (ZeusUsbEth.c): its own DWC3 gadget, no Apple USB classes, so no 23F84 fixture is needed.
 # zeus-usbeth=2 starts it; zeusacm=1 makes it a CDC ACM serial port carrying the kernel log (zeta's USB log idea)
 # instead of USB Ethernet + UDP. BSD net recipe for the ifnet/mbuf/socket KPIs.
@@ -435,21 +459,22 @@ void sheng_audio_probe(void) {}
 void sheng_backlight_probe(void) {}
 void aston_boot_screen_probe(void) {}
 // While no GPU is published every frame is already written when its swap arrives (submitted == retired).
-// iOS 26: Apple USB and GPU are not built yet (they need 23F84 class fixtures); their probes, called by
-// native_legacy_display_late_probe, start nothing. HID (hid-device-23F84-d94ap.json), touch and buttons are built below.
-void sheng_gpu_pool_probe(void) {}
-void sheng_gpu_power_probe(void) {}
+// iOS 26: Apple USB is not built yet (it needs 23F84 class fixtures): its probe, called by native_legacy_display_late_probe,
+// starts nothing. HID (hid-device-23F84-d94ap.json), touch, buttons and the GPU probe/pool/firmware are built here.
 void sheng_usb_probe(void) {}
-// GPU trace (build-zeus-adreno.py defines these on 27): off, nothing recorded.
-int native_gpu_trace_enabled(void) {return 0;}
-void native_gpu_trace_record(uint32_t,uint32_t,const uint64_t *,uint32_t) {}
-// iOS 26: no Adreno driver is linked yet.
-IOService *native_adreno_published_service() {return nullptr;}
+// GPU (2026-11-22, as the 27 builder): the Adreno driver core (CONFIG_XNU_NATIVE_ADRENO, build-zeus-adreno.py) defines the trace and
+// the published service; while no GPU is published every frame is already written when its swap arrives (submitted == retired).
+// iokit_physical_descriptor_close_notify comes from the kernel (patches/xnu-12377/gpupool-device-pager-close.patch).
+IOService *native_adreno_published_service();
+bool native_adreno_fences_detail_driver(uint32_t *,uint32_t *,uint32_t *);
+bool native_adreno_fences_driver(uint32_t *,uint32_t *);
 bool native_adreno_fences_detail(uint32_t *submitted,uint32_t *retired,uint32_t *detail) {
+    if(native_adreno_published_service())return native_adreno_fences_detail_driver(submitted,retired,detail);
     if(detail){detail[0]=detail[1]=detail[2]=0;}
     if(submitted)*submitted=0;if(retired)*retired=0;return true;
 }
 bool native_adreno_fences(uint32_t *submitted,uint32_t *retired) {
+    if(native_adreno_published_service())return native_adreno_fences_driver(submitted,retired);
     if(submitted)*submitted=0;if(retired)*retired=0;return true;
 }
 }
@@ -548,7 +573,8 @@ archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o',
      OUT / 'LegacyDisplaySupport27.o', gop_late, OUT / 'ZeusDisplayStubs.o', OUT / 'KeyStoreProbe.o', keyevents_late,
      OUT / 'CpuFreqProbe.o', OUT / 'DisplayTimingProbe.o', OUT / 'ZeusUsbEth.o', OUT / 'ZeusTouchProbe.o',
-     OUT / 'ZeusButtonProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'])
+     OUT / 'ZeusButtonProbe.o', hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o',
+     OUT / 'GpuMemoryPool.o', OUT / 'ZeusGpuProbe.o', OUT / 'ZeusGpuFirmware.o'])
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source, ABI_PATH, keystore_source]

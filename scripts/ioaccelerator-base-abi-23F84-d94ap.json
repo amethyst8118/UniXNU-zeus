@@ -1,0 +1,20 @@
+{
+ "kernelcache_sha256": "2276364d028954a1152e721820f243f9400ce5d4b13c6d57f021f010afd1eabf",
+ "collection_slide": "0x0",
+ "metaclass": "0xfffffff00b41b540",
+ "instance_bytes": 136,
+ "virtual_entries": 168,
+ "operational_overrides": [],
+ "metadata_overrides": [
+  0,
+  1,
+  7
+ ],
+ "protected_compatible_constructor_aliases": [
+  "0xfffffff009c1796c",
+  "0xfffffff009c179a0"
+ ],
+ "nondeleting_destructor": "0xfffffff009c179d4",
+ "get_meta_class": "0xfffffff009c17a40",
+ "evidence": "derived 2026-11-22 by tools/derive-ioaccelerator-fixture.py from the 24A446 record (UniXNU-aston): IOGPUFamily registers IOAcceleratorES::gMetaClass 0xfffffff00b41b540 with size 0x88; vtable 0xfffffff0080fc828 has 168 IOService-shaped entries (same diversities); slots [0, 1, 7] differ from IOService's; constructors load the vtable after IOService::IOService, the nondeleting destructor tail-calls ~IOService. Every rule reproduced the 24A446 record first."
+}

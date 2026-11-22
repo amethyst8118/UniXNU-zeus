@@ -1,0 +1,16 @@
+--- a/scripts/build-adreno740-accelerator.py
++++ b/scripts/build-adreno740-accelerator.py
+@@ -37,10 +37,11 @@
+ 
+ # iPadOS 27 and macOS 27.3 (arm64e filesets): the plan of the build, original addresses before the collection slide. The macOS
+ # base is IOGraphicsFamily's IOAccelerator, read from the symbols of its collection.
+-FILESET = ARCH == 'arm64e' and IOS_VERSION.split('.')[0] == '27'
++# zeus: the iPhone17,2 iOS 26.5.2 (23F84) kernel is an arm64e fileset too; its record is ioaccelerator-base-abi-23F84.
++FILESET = ARCH == 'arm64e' and IOS_VERSION.split('.')[0] in ('26', '27')
+ BUILD = os.environ.get('UNIXNU_IPSW_BUILD') or '24A446'
+ if os.environ.get('UNIXNU_XNU_TARGET') != 'macosx':
+-    BUILD = '24A446'
++    BUILD = '23F84' if IOS_VERSION.split('.')[0] == '26' else '24A446'
+ BASE = 'IOAccelerator' if BUILD == '26C5035r' else 'IOAcceleratorES'
+ plan_path = ROOT / (f'build/gpu-analysis/ioaccelerator-base-abi-{BUILD}.json' if FILESET else 'build/gpu-analysis/ioaccelerator-base-abi.json')
+ # The audit of the original base class needs the hardware-observed parent evidence of the audited kernel; its recorded result

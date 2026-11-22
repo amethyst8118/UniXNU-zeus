@@ -2,6 +2,9 @@
 # backend bound to the original IOMobileFramebufferLegacy through scripts/legacy-display-23F84-d94ap.json. GPU comes back
 # once the 23F84 IOAcceleratorES records exist (docs/PLAN-IOS26.md in the workspace).
 CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
+# CONFIG_XNU_NATIVE_ADRENO links sheng's Adreno driver core. Nothing starts it unless gpu-power asks; the A730 bring-up is
+# package/ZeusGpuProbe.cpp.
+CONFIG_XNU_NATIVE_ADRENO=y
 CONFIG_XNU_BUILD_ARCHIVES=y
 CONFIG_XNU_CRYPTO_BOOTSTRAP="source"
 CONFIG_XNU_DT_PANIC_REGION=y

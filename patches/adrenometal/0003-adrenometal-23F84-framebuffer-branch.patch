@@ -1,0 +1,20 @@
+--- a/NativeAdrenoMetalPlugin.mm
++++ b/NativeAdrenoMetalPlugin.mm
+@@ -475,6 +475,17 @@
+         size_t osBuildSize = sizeof osBuild - 1;
+         const bool quartz24A446 = sysctlbyname("kern.osversion", osBuild, &osBuildSize, nullptr, 0) == 0 && !strcmp(osBuild, "24A446");
+         gpu->mark(quartz24A446 ? 0x6E0A : 0x6E0B);
++        // zeus, iOS 26 (23F84) QuartzCore: CARenderServerStart 0x184140ff4; IOMFBDisplay::framebuffer_pixel_format 0x183ef7874 + 228 =
++        // 0x183ef7958 is the same `tbnz w8, #0` (word 0x37000608) on CADeviceIsVirtualized's is_virtualized byte (0x1ec5cc3a9) that takes
++        // RGhA on 24A446 (ipsw dyld disass of ~/zeus-research/dsc-23F84, 2026-11-22). With fb-bgra=1 the render server draws 8-bit BGRA,
++        // which the display pipes fetch and scale themselves (dpu-scanout=2, fb-render) instead of a half-float frame converted on the GPU.
++        // patchFramebufferBranch checks the word first (0x6E41: other instruction, nothing written).
++        if (!quartz24A446 && !strcmp(osBuild, "23F84") && !strcmp(getprogname(), "backboardd") && bootArgSet("fb-bgra=1")) {
++            if (void *start23 = dlsym(RTLD_DEFAULT, "CARenderServerStart")) {
++                const uintptr_t slide23 = (uintptr_t)ptrauth_strip(start23, ptrauth_key_function_pointer) - 0x184140ff4;
++                gpu->mark(patchFramebufferBranch(0x183ef7958 + slide23));
++            }
++        }
+         if (void *start = quartz24A446 ? dlsym(RTLD_DEFAULT, "CARenderServerStart") : nullptr) {
+             const uintptr_t slide = (uintptr_t)ptrauth_strip(start, ptrauth_key_function_pointer) - 0x1846dce88;
+             const float one = 1.0f, never = 1e30f;

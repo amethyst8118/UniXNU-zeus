@@ -1,0 +1,18 @@
+--- a/NativeAdrenoMetalPlugin.mm
++++ b/NativeAdrenoMetalPlugin.mm
+@@ -469,8 +469,13 @@
+         setenv("CA_FP16_MIN_HEADROOM", "1e30", 1);
+         setenv("CA_ALLOW_EDR_MIRRORING", "0", 1);
+ #if !TARGET_OS_OSX
+-        // The stored option values and the framebuffer branch are addresses of iPadOS 27's QuartzCore (24A446).
+-        if (void *start = dlsym(RTLD_DEFAULT, "CARenderServerStart")) {
++        // The stored option values and the framebuffer branch are addresses of iPadOS 27's QuartzCore (24A446). zeus: only on that
++        // build; on iOS 26 (23F84) they are other data, and the environment above is the whole change.
++        char osBuild[32] = {};
++        size_t osBuildSize = sizeof osBuild - 1;
++        const bool quartz24A446 = sysctlbyname("kern.osversion", osBuild, &osBuildSize, nullptr, 0) == 0 && !strcmp(osBuild, "24A446");
++        gpu->mark(quartz24A446 ? 0x6E0A : 0x6E0B);
++        if (void *start = quartz24A446 ? dlsym(RTLD_DEFAULT, "CARenderServerStart") : nullptr) {
+             const uintptr_t slide = (uintptr_t)ptrauth_strip(start, ptrauth_key_function_pointer) - 0x1846dce88;
+             const float one = 1.0f, never = 1e30f;
+             gpu->mark(writeTask(0x1e7021014 + slide, &one, sizeof one) ? 0x6E01 : 0x6EF1);

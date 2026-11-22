@@ -1,0 +1,111 @@
+--- a/scripts/build-adreno-metal-plugin.py
++++ b/scripts/build-adreno-metal-plugin.py
+@@ -17,15 +17,16 @@
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ # --target ios27: the arm64e build for iPadOS 27 (24A446), whose render server is an arm64e process.
++# --target ios26 (zeus): the same arm64e build for iOS 26.5.2 (23F84, iPhone17,2), deployment 26.0.
+ # --target macos27: the arm64e build for macOS 27 (26C5035r), in the macOS bundle layout (Contents/MacOS).
+ parser = argparse.ArgumentParser(description=__doc__)
+-parser.add_argument('--target', choices=('ios', 'ios27', 'macos27'), default='ios')
++parser.add_argument('--target', choices=('ios', 'ios26', 'ios27', 'macos27'), default='ios')
+ parser.add_argument('--no-replay', action='store_true', help='omit the optional host simulation capture used by diagnostic probes')
+ args = parser.parse_args()
+ MACOS = args.target == 'macos27'
+ # IOS27 marks the arm64e builds (iPadOS 27 and macOS 27): pointer authentication, the PAC bridge and the arm64e checks.
+-IOS27 = args.target in ('ios27', 'macos27')
+-OUT = ROOT / 'build' / {'ios': 'adreno-metal-plugin', 'ios27': 'adreno-metal-plugin27', 'macos27': 'adreno-metal-plugin-macos27'}[args.target]
++IOS27 = args.target in ('ios26', 'ios27', 'macos27')
++OUT = ROOT / 'build' / {'ios': 'adreno-metal-plugin', 'ios26': 'adreno-metal-plugin26', 'ios27': 'adreno-metal-plugin27', 'macos27': 'adreno-metal-plugin-macos27'}[args.target]
+ bundle = OUT / 'NativeAdrenoMetal.bundle'
+ # macOS bundles keep the executable in Contents/MacOS; Turnip stays beside it (turnip::libraryPath).
+ contents = bundle / 'Contents' if MACOS else bundle
+@@ -37,7 +38,7 @@
+ code_dir.mkdir(parents=True)
+ resources.mkdir(parents=True, exist_ok=True)
+ sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx' if MACOS else 'iphoneos', '--show-sdk-path'], text=True).strip()
+-base = ['xcrun', 'clang', '-target', {'ios': 'arm64-apple-ios17.0', 'ios27': 'arm64e-apple-ios27.0', 'macos27': 'arm64e-apple-macos27.0'}[args.target], '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror',
++base = ['xcrun', 'clang', '-target', {'ios': 'arm64-apple-ios17.0', 'ios26': 'arm64e-apple-ios26.0', 'ios27': 'arm64e-apple-ios27.0', 'macos27': 'arm64e-apple-macos27.0'}[args.target], '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror',
+         '-fstack-protector-strong']
+ source_hash = hashlib.sha256()
+ for path in sorted((ROOT / 'drivers/AdrenoMetal').rglob('*')):
+@@ -120,7 +121,7 @@
+ (contents / 'Info.plist').write_bytes(plistlib.dumps(dict(
+     CFBundleIdentifier='org.blu-sharky.NativeAdrenoMetal', CFBundleExecutable='NativeAdrenoMetal', CFBundlePackageType='BNDL',
+     CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='NativeAdrenoMetalDevice',
+-    **({'LSMinimumSystemVersion': '27.0'} if MACOS else {'MinimumOSVersion': '27.0' if IOS27 else '17.0'})), fmt=plistlib.FMT_XML))
++    **({'LSMinimumSystemVersion': '27.0'} if MACOS else {'MinimumOSVersion': '26.0' if args.target == 'ios26' else '27.0' if IOS27 else '17.0'})), fmt=plistlib.FMT_XML))
+ subprocess.run(['codesign', '--force', '--sign', '-', '--pagesize', '4096', '--identifier', 'org.blu-sharky.NativeAdrenoMetal',
+                 bundle], check=True)
+ subprocess.run(['codesign', '--verify', '--strict', bundle], check=True)
+--- a/scripts/build-adreno-metal-bridge.py
++++ b/scripts/build-adreno-metal-bridge.py
+@@ -17,7 +17,7 @@
+ PIN = json.loads((ROOT / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
+ SOURCE = ROOT / '.cache/gpu-reference/metal2vulkan'
+ parser = argparse.ArgumentParser(description=__doc__)
+-parser.add_argument('--target', choices=['ios', 'ios27', 'macos27', 'host'], default='ios')
++parser.add_argument('--target', choices=['ios', 'ios26', 'ios27', 'macos27', 'host'], default='ios')
+ parser.add_argument('--manifest-only', action='store_true',
+                     help='write build/adreno-metal-bridge/Cargo.toml (patched source, fixtures) and stop before cargo, for `cargo fetch`')
+ args = parser.parse_args()
+@@ -115,14 +115,14 @@
+ if args.manifest_only:
+     print(manifest)
+     raise SystemExit(0)
+-triple = {'ios': 'aarch64-apple-ios', 'ios27': 'arm64e-apple-ios', 'macos27': 'arm64e-apple-darwin', 'host': 'aarch64-apple-darwin'}[args.target]
+-ARM64E = args.target in ('ios27', 'macos27')
++triple = {'ios': 'aarch64-apple-ios', 'ios26': 'arm64e-apple-ios', 'ios27': 'arm64e-apple-ios', 'macos27': 'arm64e-apple-darwin', 'host': 'aarch64-apple-darwin'}[args.target]
++ARM64E = args.target in ('ios26', 'ios27', 'macos27')
+ # arm64e has no prebuilt std: it is built from rust-src (RUSTC_BOOTSTRAP for -Z); the iPadOS 27 processes that load the plugin are arm64e.
+ cargo = ['cargo', '+1.98.0'] + (['-Z', 'build-std=std,panic_unwind'] if ARM64E else [])
+ # The translator source the runtime is built from (its pin and recorded patches), which keys the shader cache: shader priming keeps what it
+ # finished while this stays the same (PrimeShaders.h).
+ runtime_id = hashlib.sha256((PIN + '\n' + states[-1]).encode()).hexdigest()[:32]
+-env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), NMB_SCANOUT_AIR=str(scanout_air), IPHONEOS_DEPLOYMENT_TARGET='27.0' if args.target == 'ios27' else '17.0', MACOSX_DEPLOYMENT_TARGET='27.0' if args.target == 'macos27' else '14.0')
++env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), NMB_SCANOUT_AIR=str(scanout_air), IPHONEOS_DEPLOYMENT_TARGET={'ios26': '26.0', 'ios27': '27.0'}.get(args.target, '17.0'), MACOSX_DEPLOYMENT_TARGET='27.0' if args.target == 'macos27' else '14.0')
+ if ARM64E:
+     env['RUSTC_BOOTSTRAP'] = '1'
+ target_dir = ROOT / 'build/m2v-target'
+--- a/scripts/build-turnip-darwin.py
++++ b/scripts/build-turnip-darwin.py
+@@ -17,12 +17,12 @@
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ parser = argparse.ArgumentParser(description=__doc__)
+-parser.add_argument('--target', choices=('host', 'ios', 'ios27', 'macos27'), default='host')
++parser.add_argument('--target', choices=('host', 'ios', 'ios26', 'ios27', 'macos27'), default='host')
+ parser.add_argument('--configure-only', action='store_true')
+ parser.add_argument('--builtin-pack', type=Path, help='Embed an exact-source/profile/GPU-bound own builtin pack; no runtime compiler fallback')
+ args = parser.parse_args()
+ SOURCE = ROOT / '.cache/mesa-work'
+-OUT = ROOT / {'host': 'build/mesa-tu', 'ios': 'build/mesa-tu-ios', 'ios27': 'build/mesa-tu-ios27', 'macos27': 'build/mesa-tu-macos27'}[args.target]
++OUT = ROOT / {'host': 'build/mesa-tu', 'ios': 'build/mesa-tu-ios', 'ios26': 'build/mesa-tu-ios26', 'ios27': 'build/mesa-tu-ios27', 'macos27': 'build/mesa-tu-macos27'}[args.target]
+ LOGS = ROOT / '.cache'
+ 
+ 
+@@ -60,11 +60,11 @@
+            '-Dllvm=disabled', '-Dshared-glapi=disabled', '-Dxmlconfig=disabled', '-Dshader-cache=enabled',
+            '-Dtools=', '-Dbuild-tests=false', '-Dvideo-codecs=', '-Dvulkan-layers=']
+ setup = [ROOT / '.cache/mesa-venv/bin/meson', 'setup', OUT, SOURCE, '--wrap-mode=nodownload']
+-if args.target in ('ios', 'ios27', 'macos27'):
++if args.target in ('ios', 'ios26', 'ios27', 'macos27'):
+     sdk_name = 'macosx' if args.target == 'macos27' else 'iphoneos'
+     sdk = read(['xcrun', '--sdk', sdk_name, '--show-sdk-path'])
+     find = lambda tool: read(['xcrun', '--sdk', sdk_name, '--find', tool])
+-    triple = {'ios': 'arm64-apple-ios17.0', 'ios27': 'arm64e-apple-ios27.0', 'macos27': 'arm64e-apple-macos27.0'}[args.target]
++    triple = {'ios': 'arm64-apple-ios17.0', 'ios26': 'arm64e-apple-ios26.0', 'ios27': 'arm64e-apple-ios27.0', 'macos27': 'arm64e-apple-macos27.0'}[args.target]
+     flags = ['-target', triple, '-isysroot', sdk, '-fstack-protector-strong']
+     cross = ROOT / ('build/mesa-tu-%s.cross' % args.target)
+     cross.parent.mkdir(exist_ok=True)
+--- a/scripts/build-boot-runtime.py
++++ b/scripts/build-boot-runtime.py
+@@ -89,7 +89,7 @@
+     # Replay is a diagnostic capture from a host GPU simulation, not a runtime
+     # dependency. Do not require unrelated test fixtures in a release build.
+     script('build-adreno-metal-plugin.py', '--target', target, '--no-replay')
+-    return ROOT / 'build' / {'ios27': 'adreno-metal-plugin27', 'macos27': 'adreno-metal-plugin-macos27'}.get(target, 'adreno-metal-plugin')
++    return ROOT / 'build' / {'ios26': 'adreno-metal-plugin26', 'ios27': 'adreno-metal-plugin27', 'macos27': 'adreno-metal-plugin-macos27'}.get(target, 'adreno-metal-plugin')
+ 
+ 
+ def build_boot_shims(work, base=None):

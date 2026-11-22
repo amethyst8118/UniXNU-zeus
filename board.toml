@@ -45,7 +45,7 @@ archives = [
   # The keystore state service, built before the display archive that links its late object (as aston).
   "component:AppleKeyStoreState",
   # Display (owned GOP backend on the original 23F84 IOMobileFramebufferLegacy), keystore probe and key events, CPU frequency and
-  # display timing. GPU (zeus Adreno, accelerator ABI), HID, touch, buttons and USB return once their 23F84 records exist.
+  # display timing, HID with touch and buttons. GPU (zeus Adreno, accelerator ABI) and USB return once their 23F84 records exist.
   "build-zeus-legacy-display-26.py",
 ]
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8450.config", "os:configs/ios.config"]

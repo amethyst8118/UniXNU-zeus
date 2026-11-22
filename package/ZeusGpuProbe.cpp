@@ -1035,8 +1035,12 @@ void publishMetal() {
     if (!accelerator) {gMetalStatus = kIOReturnNoMemory; return;}
     if (!accelerator->init()) {accelerator->release(); gMetalStatus = kIOReturnError; return;}
     // The keys the original _MTLRegisterDevices reads. The plugin name is ours; no Apple device identity is claimed.
-    accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
-    accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
+    // metal-native=1 (docs/NATIVE-METAL-PLAN.md): the native driver (ios-sweet's SweetNativeMetal frontend on Gallium freedreno,
+    // built as ZeusNativeMetal.bundle in the GPU add-on) instead of the metal2vulkan plug-in. Both bundles ship; this picks one.
+    uint32_t nativeMetal = 0;
+    PE_parse_boot_argn("metal-native", &nativeMetal, sizeof nativeMetal);
+    accelerator->setProperty("MetalPluginName", nativeMetal == 1 ? "ZeusNativeMetal" : "NativeAdrenoMetal");
+    accelerator->setProperty("MetalPluginClassName", nativeMetal == 1 ? "SweetNativeMetalDevice" : "NativeAdrenoMetalDevice");
     // patches/xnu/zzw-native-adreno-sandbox-grant.patch: the original sandbox profiles name no class of this driver.
     accelerator->setProperty("NativeSandboxGrantProcess", "*");
     gMetalStage = 4;

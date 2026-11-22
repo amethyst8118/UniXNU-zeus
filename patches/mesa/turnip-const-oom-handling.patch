@@ -1,0 +1,136 @@
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -8058,7 +8058,15 @@ tu_emit_consts(struct tu_cmd_buffer *cmd, bool compute)
+       return (struct tu_draw_state) {};
+ 
+    struct tu_cs cs;
+-   tu_cs_begin_sub_stream(&cmd->sub_cs, dwords, &cs);
++   // On a failed BO reservation cs has not been initialized. Recording into
++   // it dereferences a null/random device in release builds (Diting 22H374
++   // backboardd crash in tu_bo_init_new_explicit_iova). Preserve the real
++   // Vulkan error and let vkEndCommandBuffer refuse this command buffer.
++   VkResult const_result = tu_cs_begin_sub_stream(&cmd->sub_cs, dwords, &cs);
++   if (const_result != VK_SUCCESS) {
++      vk_command_buffer_set_error(&cmd->vk, const_result);
++      return (struct tu_draw_state) {};
++   }
+ 
+    if (shared_consts->type == IR3_PUSH_CONSTS_SHARED) {
+       tu6_emit_shared_consts(&cs, shared_consts, cmd->push_constants, compute);
+@@ -8607,6 +8615,8 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
+                 /* note: draw_count is 0 for indirect */
+                 uint32_t draw_count)
+ {
++   if (vk_command_buffer_has_error(&cmd->vk))
++      return cmd->vk.record_result;
+    const struct tu_program_state *program = &cmd->state.program;
+    struct tu_render_pass_state *rp = &cmd->state.rp;
+ 
+@@ -8794,5 +8804,7 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
+    if (dirty & TU_CMD_DIRTY_SHADER_CONSTS)
+       cmd->state.shader_const = tu_emit_consts<CHIP>(cmd, false);
++   if (vk_command_buffer_has_error(&cmd->vk))
++      return cmd->vk.record_result;
+ 
+    if (dirty & TU_CMD_DIRTY_DESC_SETS)
+       tu6_emit_descriptor_sets<CHIP>(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
+@@ -9087,7 +9099,8 @@ tu_CmdDraw(VkCommandBuffer commandBuffer,
+ 
+    tu6_emit_vs_params(cmd, 0, firstVertex, firstInstance);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, false, vertexCount);
++   if (tu6_draw_common<CHIP>(cmd, cs, false, vertexCount) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 3);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
+@@ -9128,7 +9141,8 @@ tu_CmdDrawMultiEXT(VkCommandBuffer commandBuffer,
+       tu6_emit_vs_params(cmd, i, draw->firstVertex, firstInstance);
+ 
+       if (i == 0)
+-         tu6_draw_common<CHIP>(cmd, cs, false, max_vertex_count);
++         if (tu6_draw_common<CHIP>(cmd, cs, false, max_vertex_count) != VK_SUCCESS)
++            return;
+ 
+       if (cmd->state.dirty & TU_CMD_DIRTY_VS_PARAMS) {
+          tu_cs_emit_pkt7(cs, CP_SET_DRAW_STATE, 3);
+@@ -9161,7 +9175,8 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+ 
+    tu6_emit_vs_params(cmd, 0, vertexOffset, firstInstance);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
++   if (tu6_draw_common<CHIP>(cmd, cs, true, indexCount) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
+@@ -9207,7 +9222,8 @@ tu_CmdDrawMultiIndexedEXT(VkCommandBuffer commandBuffer,
+       tu6_emit_vs_params(cmd, i, vertexOffset, firstInstance);
+ 
+       if (i == 0)
+-         tu6_draw_common<CHIP>(cmd, cs, true, max_index_count);
++         if (tu6_draw_common<CHIP>(cmd, cs, true, max_index_count) != VK_SUCCESS)
++            return;
+ 
+       if (cmd->state.dirty & TU_CMD_DIRTY_VS_PARAMS) {
+          tu_cs_emit_pkt7(cs, CP_SET_DRAW_STATE, 3);
+@@ -9260,7 +9276,8 @@ tu_CmdDrawIndirect(VkCommandBuffer commandBuffer,
+    if (cmd->device->physical_device->info->props.indirect_draw_wfm_quirk)
+       draw_wfm(cmd);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, false, 0);
++   if (tu6_draw_common<CHIP>(cmd, cs, false, 0) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 6);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
+@@ -9291,7 +9308,8 @@ tu_CmdDrawIndexedIndirect(VkCommandBuffer commandBuffer,
+    if (cmd->device->physical_device->info->props.indirect_draw_wfm_quirk)
+       draw_wfm(cmd);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, true, 0);
++   if (tu6_draw_common<CHIP>(cmd, cs, true, 0) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 9);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
+@@ -9331,7 +9349,8 @@ tu_CmdDrawIndirectCount(VkCommandBuffer commandBuffer,
+     */
+    draw_wfm(cmd);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, false, 0);
++   if (tu6_draw_common<CHIP>(cmd, cs, false, 0) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 8);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
+@@ -9365,7 +9384,8 @@ tu_CmdDrawIndexedIndirectCount(VkCommandBuffer commandBuffer,
+ 
+    draw_wfm(cmd);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, true, 0);
++   if (tu6_draw_common<CHIP>(cmd, cs, true, 0) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 11);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
+@@ -9405,7 +9425,8 @@ tu_CmdDrawIndirectByteCountEXT(VkCommandBuffer commandBuffer,
+ 
+    tu6_emit_vs_params(cmd, 0, 0, firstInstance);
+ 
+-   tu6_draw_common<CHIP>(cmd, cs, false, 0);
++   if (tu6_draw_common<CHIP>(cmd, cs, false, 0) != VK_SUCCESS)
++      return;
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_AUTO, 6);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_XFB));
+@@ -9707,6 +9728,9 @@ tu_CmdDispatch(VkCommandBuffer commandBuffer,
+    /* note: no reason to have this in a separate IB */
+    tu_cs_emit_state_ib(cs, tu_emit_consts<CHIP>(cmd, true));
+ 
++   if (vk_command_buffer_has_error(&cmd->vk))
++      return;
++
+    tu_emit_compute_driver_params<CHIP>(cmd, cs, info);
+ 
+    if (cmd->state.dirty & TU_CMD_DIRTY_COMPUTE_DESC_SETS) {

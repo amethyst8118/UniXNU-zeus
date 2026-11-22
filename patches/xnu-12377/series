@@ -15,3 +15,5 @@ zeus-launchd-cache-overlay.patch
 zeus-staged-union.patch
 zeus-union-identity.patch
 zeus-getattrlist-diag.patch
+uke-idle-timer-rearm.patch
+zzzzzzzzzzz-sheng-edge-matrix.patch

@@ -1,5 +1,5 @@
 diff --git a/NativeAdrenoMetalPlugin.mm b/NativeAdrenoMetalPlugin.mm
-index ccb8b90..b3c38ba 100644
+index ccb8b90..57a9eaf 100644
 --- a/NativeAdrenoMetalPlugin.mm
 +++ b/NativeAdrenoMetalPlugin.mm
 @@ -214,6 +214,7 @@ static void clientFailure(unsigned port, const char *step, const char *detail) {
@@ -10,7 +10,7 @@ index ccb8b90..b3c38ba 100644
  static id clientDevice(unsigned port) {
      char turnip[1024];
      if (!turnip::libraryPath(turnip, sizeof turnip) || access(turnip, R_OK) != 0) {clientFailure(port, "no-turnip", ""); return nil;}
-@@ -224,14 +225,18 @@ static id clientDevice(unsigned port) {
+@@ -224,14 +225,17 @@ static id clientDevice(unsigned port) {
      }
      // IOSurfaces this GPU reads or writes must be plain rows, as in the render server.
      CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
@@ -19,10 +19,9 @@ index ccb8b90..b3c38ba 100644
      if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
      if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
      strlcpy(candidates[2], sharedShaderCacheDirectory().c_str(), sizeof candidates[2]);
-+    // zeus: the temp directory is emptied at every boot (launchd dirs_cleaner): SpringBoard, iconservicesagent, widgets and apps
-+    // translated every pipeline again each boot. $HOME/Library/Caches/<bundle id or process>/m2v persists ($HOME is a containerised
-+    // app's container); the sandbox is asked first without a report.
++    // zeus: the temp directory is emptied at every boot (launchd dirs_cleaner); Metal's own iOS cache directory persists.
 +    zeusPersistentClientCache(candidates[3], sizeof candidates[3] - 16);
++    zeusSystemLayer();   // zeus: the read-only cache shipped in the image, for what this process's own lacks
      id device = nil;
      const char *lastError = "";
      unsigned usable = 0;
@@ -31,7 +30,7 @@ index ccb8b90..b3c38ba 100644
          if (device) break;
          if (!candidates[i][0]) continue;
          // In the user cache directory the cache sits inside Metal's own shader cache directory (com.apple.metal): a sandboxed process may
-@@ -239,7 +244,7 @@ static id clientDevice(unsigned port) {
+@@ -239,7 +243,7 @@ static id clientDevice(unsigned port) {
          // and denied every write to <cache>/m2v, so each of its launches compiled every pipeline again and it was killed at its memory
          // limit within seconds).
          if (i == 0) {strlcat(candidates[i], "com.apple.metal", sizeof candidates[i]); mkdir(candidates[i], 0700); strlcat(candidates[i], "/", sizeof candidates[i]);}
@@ -40,16 +39,35 @@ index ccb8b90..b3c38ba 100644
          mkdir(candidates[i], 0700);
          if (access(candidates[i], W_OK) != 0) continue;
          ++usable;
+@@ -577,6 +581,7 @@ static id deviceForPort(unsigned port) {
+             }
+             // What the device writes in the system cache's directory is readable by everyone; in any other, by this user alone.
+             native_bridge_metal_system_cache(nullptr, nullptr, 0, i == 6);
++            zeusSystemLayer();   // zeus: the read-only cache shipped in the image
+             @try {
+                 device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
+             } @catch (NSException *exception) {
+@@ -629,7 +634,7 @@ static id deviceForPort(unsigned port) {
+         // The translator recurses deeply on large functions: give it the stack of a main thread.
+         pthread_attr_setstacksize(&attributes, 8u << 20);
+         pthread_t primer;
+-        pthread_create(&primer, &attributes, [](void *) -> void * {
++        if (!zeusdl::bootArg("zeus-prime=0")) pthread_create(&primer, &attributes, [](void *) -> void * {
+                 pthread_setname_np("native-metal-prime");   // a process sample and the telemetry's TH rows name its CPU time
+                 char list[1024];
+                 prime::run((id<MTLDevice>)device, gCacheDirectory, 90,
 diff --git a/ZeusClientQuirks.h b/ZeusClientQuirks.h
 new file mode 100644
-index 0000000..1313c3d
+index 0000000..741d3aa
 --- /dev/null
 +++ b/ZeusClientQuirks.h
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,131 @@
 +// SPDX-License-Identifier: MIT
-+// zeus (Xiaomi 12 Pro, A730, iOS 26.5.2 23F84): client cache directory and UIKit display-link rate. patches/adrenometal/0005.
++// zeus (Xiaomi 12 Pro, A730, iOS 26.5.2 23F84): client cache directory, shipped system cache, UIKit display-link rate.
++// UniXNU-zeus patches/adrenometal/0005.
 +#pragma once
 +#include <CoreFoundation/CoreFoundation.h>
++#include <errno.h>
 +#include <objc/runtime.h>
 +#include <os/log.h>
 +#include <pwd.h>
@@ -60,39 +78,79 @@ index 0000000..1313c3d
 +#include <unistd.h>
 +
 +extern "C" int sandbox_check(pid_t pid, const char *operation, int type, ...);
++extern "C" bool native_bridge_metal_system_cache(const char *reader, const uint32_t *owners, unsigned count, bool writer);
 +
-+// A persistent cache directory for a client: $HOME/Library/Caches/<bundle id or process name>/m2v, or "" when the sandbox refuses it.
++namespace zeusdl {
++static bool bootArg(const char *token) {
++    char args[1100] = {};
++    size_t size = sizeof args - 1;
++    if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) != 0) return false;
++    const size_t n = strlen(token);
++    for (const char *at = strstr(args, token); at; at = strstr(at + 1, token))
++        if ((at == args || at[-1] == ' ') && (at[n] == 0 || at[n] == ' ')) return true;
++    return false;
++}
++}  // namespace zeusdl
++
++// A directory this process may keep: made level by level, owned by this user, writable. 0 or the step that failed (x100) + errno.
++static int zeusUsableDirectory(const char *const *levels, unsigned count) {
++    for (unsigned i = 0; i < count; ++i)
++        if (mkdir(levels[i], 0700) != 0 && errno != EEXIST) return 100 * (i + 1) + errno;
++    struct stat st = {};
++    const char *path = levels[count - 1];
++    if (lstat(path, &st) != 0) return 900 + errno;
++    if (!S_ISDIR(st.st_mode) || st.st_uid != getuid()) return 950;
++    if (access(path, W_OK) != 0) return 980 + errno;
++    return 0;
++}
++
++// A persistent cache directory for a client, or "": <Caches>/<bundle id>/com.apple.metalfe/m2v (Metal's own iOS cache directory),
++// then <Caches>/<bundle id>/m2v. <Caches> is $HOME/Library/Caches ($HOME is a containerised app's container).
 +static void zeusPersistentClientCache(char *out, size_t size) {
 +    out[0] = 0;
 +    const char *home = getenv("HOME");
 +    if (!home || !home[0]) {
 +        if (const passwd *user = getpwuid(getuid()); user && user->pw_dir) home = user->pw_dir;
 +    }
-+    if (!home || !home[0] || !strcmp(home, "/") || !strcmp(home, "/var/empty")) return;
 +    char name[256] = {};
 +    if (CFBundleRef bundle = CFBundleGetMainBundle()) {
 +        if (CFStringRef ident = CFBundleGetIdentifier(bundle)) CFStringGetCString(ident, name, sizeof name, kCFStringEncodingUTF8);
 +    }
 +    if (!name[0]) strlcpy(name, getprogname(), sizeof name);
 +    for (char *c = name; *c; ++c) if (*c == '/') *c = '_';
-+    char caches[512], dir[512], path[512];
-+    snprintf(caches, sizeof caches, "%s/Library/Caches", home);
-+    snprintf(dir, sizeof dir, "%s/%s", caches, name);
-+    snprintf(path, sizeof path, "%s/m2v", dir);
-+    // SANDBOX_FILTER_PATH (1) | SANDBOX_CHECK_NO_REPORT (0x40000000): nonzero refuses, and a refused probe writes no violation report.
-+    if (sandbox_check(getpid(), nullptr, 0) == 1 &&
-+        sandbox_check(getpid(), "file-write-create", 1 | 0x40000000, path) != 0) return;
-+    mkdir(caches, 0700);
-+    mkdir(dir, 0700);
-+    mkdir(path, 0700);
-+    struct stat st = {};
-+    if (lstat(path, &st) || !S_ISDIR(st.st_mode) || st.st_uid != getuid() || access(path, W_OK) != 0) return;
-+    if (strlen(path) + 1 > size) return;
-+    strlcpy(out, path, size);
++    int why[2] = {-1, -1};
++    if (home && home[0] && strcmp(home, "/") && strcmp(home, "/var/empty")) {
++        char caches[512], app[512], metalfe[512], a[512], b[512];
++        snprintf(caches, sizeof caches, "%s/Library/Caches", home);
++        snprintf(app, sizeof app, "%s/%s", caches, name);
++        snprintf(metalfe, sizeof metalfe, "%s/com.apple.metalfe", app);
++        snprintf(a, sizeof a, "%s/m2v", metalfe);
++        snprintf(b, sizeof b, "%s/m2v", app);
++        const char *first[] = {caches, app, metalfe, a}, *second[] = {caches, app, b};
++        const bool sandboxed = sandbox_check(getpid(), nullptr, 0) == 1;
++        // SANDBOX_FILTER_PATH (1) | SANDBOX_CHECK_NO_REPORT (0x40000000): nonzero refuses; a refused probe writes no report.
++        for (int k = 0; k < 2 && !out[0]; ++k) {
++            const char *path = k ? b : a;
++            if (sandboxed && sandbox_check(getpid(), "file-write-create", 1 | 0x40000000, path) != 0) {why[k] = 1; continue;}
++            why[k] = k ? zeusUsableDirectory(second, 3) : zeusUsableDirectory(first, 4);
++            if (!why[k] && strlen(path) + 1 <= size) strlcpy(out, path, size);
++        }
++    }
++    os_log(OS_LOG_DEFAULT, "NativeAdrenoMetal zeus: client cache %{public}s (%{public}s; home %{public}s; metalfe %d, app %d)",
++           out[0] ? out : "none", name, home ? home : "-", why[0], why[1]);
 +}
 +
-+// UIKit's in-process animation manager asks its CADisplayLink for 20..120 a second, preferred 30. Its rate requests are dropped for
-+// that link only (the link then follows the display), as UniXNU-zizhan does (57 -> 95 fps). zeus-dl=0 turns it off.
++// The read-only system cache shipped in the image (the union of a boot's caches for this plug-in build). True when it is the layer.
++static const char kZeusSystemLayer[] = "/System/Library/Extensions/NativeAdrenoMetal.cache";
++static bool zeusSystemLayer() {
++    if (zeusdl::bootArg("zeus-syscache=0")) return false;
++    struct stat st = {};
++    if (lstat(kZeusSystemLayer, &st) != 0 || !S_ISDIR(st.st_mode)) return false;
++    static const uint32_t owners[] = {0};
++    return native_bridge_metal_system_cache(kZeusSystemLayer, owners, 1, false);
++}
++
++// UIKit's in-process animation manager asks its CADisplayLink for 20..120 a second, preferred 30. zeus-dl=0 turns the drop off.
 +namespace zeusdl {
 +typedef struct {float minimum, maximum, preferred;} Range;
 +static id (*made)(id, SEL, id, SEL);
@@ -114,20 +172,13 @@ index 0000000..1313c3d
 +    fps(self, sel, value);
 +}
 +static void setRange(id self, SEL sel, Range value) {
-+    if (full(self)) {
-+        if (dropped++ < 2) os_log(OS_LOG_DEFAULT, "NativeAdrenoMetal zeus: dropped display link rate %.0f..%.0f preferred %.0f", value.minimum, value.maximum, value.preferred);
++    const bool animation = value.minimum == 20 && value.maximum == 120 && value.preferred == 30;
++    if (animation || full(self)) {
++        if (dropped++ < 3) os_log(OS_LOG_DEFAULT, "NativeAdrenoMetal zeus: dropped display link rate %.0f..%.0f preferred %.0f (%{public}s)",
++                                  value.minimum, value.maximum, value.preferred, getprogname());
 +        value = Range{0, 0, 0};
 +    }
 +    range(self, sel, value);
-+}
-+static bool bootArg(const char *token) {
-+    char args[1100] = {};
-+    size_t size = sizeof args - 1;
-+    if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) != 0) return false;
-+    const size_t n = strlen(token);
-+    for (const char *at = strstr(args, token); at; at = strstr(at + 1, token))
-+        if ((at == args || at[-1] == ' ') && (at[n] == 0 || at[n] == ' ')) return true;
-+    return false;
 +}
 +__attribute__((constructor)) static void install() {
 +    if (bootArg("zeus-dl=0")) return;

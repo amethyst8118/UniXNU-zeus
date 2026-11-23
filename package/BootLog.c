@@ -39,6 +39,8 @@ extern uint64_t native_ufs_export_blocks(void) __attribute__((weak_import));
 extern int native_ufs_export_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
 extern int native_ufs_log_sync(void) __attribute__((weak_import));
 // The display driver's last refused swap (LegacyDisplayProbe.cpp): counts, reason, layer state/options, request size, surface slots and the surface.
+extern volatile uint32_t zeus_gpu_dcvs[18] __attribute__((weak_import));
+extern volatile int32_t zeus_thermal[6] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_rejected_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_rej_reason __attribute__((weak_import));
@@ -1382,6 +1384,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                m[9], m[10], m[11], m[12], m[13]);
       at = put(out, at, cap, row, sizeof row);
     }
+  }
+  // [zeus gpu]: the clock governor and die temperatures (ZeusGpuProbe.cpp), then the display swaps accepted.
+  if (&zeus_gpu_dcvs && &zeus_thermal) {
+    char row[300];
+    const volatile uint32_t *g = zeus_gpu_dcvs;
+    snprintf(row, sizeof row, "[zeus gpu] dcvs %u lvl %u chg %u fail %u busy %u win %u at %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u | dC gpu %d big %d little %d peak %d/%d/%d | swaps %u",
+             g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7], g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15], g[16], g[17],
+             zeus_thermal[0], zeus_thermal[1], zeus_thermal[2], zeus_thermal[3], zeus_thermal[4], zeus_thermal[5],
+             &native_legacy_swap_accepted_count ? native_legacy_swap_accepted_count : 0);
+    at = put(out, at, cap, row, sizeof row);
   }
   // [gpu recovery]: msm hangcheck and GPU restarts (NativeAdrenoSubmit::recover): hangs found, restarts, failed restarts, the last hung
   // fence, the last restart's IOReturn, submissions replayed, hangs with a guilty job, hangs of the kernel's VM; then the board's restart

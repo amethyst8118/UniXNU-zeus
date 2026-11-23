@@ -113,6 +113,7 @@ const uint32_t kSize[kWindows] = {0x1000, 0x1000, GPB_GPUCC_SIZE, GPB_SMMU_GR0_S
                                   0x40000, 0x37000, 0x10000, 0x10000, 0x1000, 0x40000};
 uintptr_t gBase[kWindows];
 unsigned gLast = kWindows, gPauseMs = 1000;
+unsigned gBootLevel = 1, gBootBw = 3, gBwCap = 11;   // the boot vote and the governor's bandwidth cap
 
 uintptr_t mapIo(uint64_t phys, uint32_t size) {return ml_io_map_unmappable(static_cast<vm_offset_t>(phys), size, 7);}
 // Plain 32-bit accesses: a hypervisor trap can only emulate the simple forms.
@@ -547,6 +548,8 @@ void gmuHfiAndGx() {
   PE_parse_boot_argn("gpu-bw", &bwLevel, sizeof bwLevel);
   if (gpuLevel < 1 || gpuLevel >= perf[0]) gpuLevel = 1;
   if (bwLevel >= 12) bwLevel = 3;
+  gBootLevel = gpuLevel; gBootBw = bwLevel;
+  if (PE_parse_boot_argn("gpu-dcvs-bw", &gBwCap, sizeof gBwCap) && gBwCap > 11) gBwCap = 11;
   const uint32_t empty = 0, vote[3] = {1, gpuLevel, bwLevel};
   printf("ZEUS GPU: vote GPU level %u (%u MHz), bandwidth level %u\n", gpuLevel, kGpu[gpuLevel].khz / 1000, bwLevel);
   gmuWr(GMU2HOST_INTR_CLR, 0xffffffffu);
@@ -1224,11 +1227,166 @@ void run(unsigned mode) {
   printf("ZEUS GPU: done\n");
 }
 
+// GPU clock governor (`gpu-dcvs=1`), after sheng's (GpuPowerProbe.cpp, BSD-2-Clause-Patent). gpum33: the boot vote held 818 MHz for the
+// whole boot and the firmware limited the CPU clusters to a third of their vote under load. The GMU's XO power counter 0 counts 19.2 MHz
+// ticks while the GPU is busy (AO CX_BUSY_MASK 0xff000000, SELECT_0 low byte 0x20, ENABLE 1: adreno_gen7.c, same on the A730). Every
+// 16 ms: to the top when a window was over 85 % busy; up to the lowest level that keeps it 50 % busy; down one level after 4 windows
+// that needed at most 0.8 x the next lower one; to the floor (`gpu-dcvs-min`, default 3) after 80 ms without work. Highest level:
+// gpu-level. Each level's bandwidth is the zeus device tree's qcom,bus-freq, at most gpu-dcvs-bw (default 11). A busy counter that never
+// moves while the ring holds work (64 windows) puts the boot level back and ends the governor. A failed vote is counted, and eight in a
+// row end it. Nothing here prints: ioWrite and hfiSend do, and the console is slow.
+extern "C" {
+// [0] 1 running 2 counter dead 3 votes failing, [1] level, [2] changes, [3] failed votes, [4] busy % of the last 10 s, [5] windows in 10 s,
+// [6..17] % of those 10 s at levels 1..12
+volatile uint32_t zeus_gpu_dcvs[18];
+// Die temperatures in 0.1 C: [0] GPU (c263000 #14), [1] hottest performance/prime core (c263000 #5..#13), [2] hottest efficiency core
+// (c265000 #1..#4), [3..5] their peaks. 0x7fffffff: not read.
+volatile int32_t zeus_thermal[6] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
+}
+constexpr unsigned kDcvsTop = 12;
+constexpr uint32_t kDcvsMHz[kDcvsTop + 1] = {0, 220, 285, 317, 350, 421, 492, 545, 599, 640, 734, 791, 818};
+constexpr uint8_t kDcvsBw[kDcvsTop + 1] = {0, 2, 2, 2, 3, 6, 6, 8, 8, 10, 10, 11, 11};
+uint32_t gmuQuietRd(uint32_t dword) {return rd32(gBase[W_GMU] + dword * 4 - 0x68000);}
+void gmuQuietWr(uint32_t dword, uint32_t v) {wr32(gBase[W_GMU] + dword * 4 - 0x68000, v);}
+// hfiSend's exchange without its prints and its long busy waits: sleeps 1 ms between looks, 50 ms at most.
+bool dcvsVote(unsigned level, unsigned bw) {
+  volatile uint32_t *m = reinterpret_cast<volatile uint32_t *>(gHfi.cpu), *cmdq = m + 6, *rspq = m + 18;
+  volatile uint32_t *cmd = m + 212, *rsp = m + 212 + kQueueWords;
+  cleanCache(gHfi.cpu, gHfi.bytes);
+  uint32_t write = cmdq[11];
+  if (write >= kQueueWords || (write & 3)) return false;
+  const uint32_t sequence = (++gHfiSequence) % 0xfff;
+  const uint32_t words[4] = {(sequence << 20) | (4u << 8) | 30, 1, level, bw};
+  for (unsigned i = 0; i < 4; ++i) cmd[(write + i) & (kQueueWords - 1)] = words[i];
+  cmdq[11] = (write + 4) & (kQueueWords - 1);
+  cleanCache(gHfi.cpu, gHfi.bytes);
+  gmuQuietWr(HOST2GMU_INTR_SET, 1);
+  for (unsigned tries = 0; tries < 50; ++tries) {
+    IOSleep(1);
+    if (!(gmuQuietRd(GMU2HOST_INTR_INFO) & 1)) continue;
+    gmuQuietWr(GMU2HOST_INTR_CLR, 1);
+    cleanCache(gHfi.cpu, gHfi.bytes);
+    while (rspq[10] != rspq[11]) {
+      const uint32_t read = rspq[10];
+      if (read >= kQueueWords) return false;
+      const uint32_t first = rsp[read], n = (first >> 8) & 255;
+      if (!n || n > 32) return false;
+      const uint32_t ack = rsp[(read + 1) & (kQueueWords - 1)], error = rsp[(read + 2) & (kQueueWords - 1)];
+      rspq[10] = (read + ((n + 3) & ~3u)) & (kQueueWords - 1);
+      cleanCache(gHfi.cpu, 0x100);
+      if ((first & 255) == 100 || ((first >> 16) & 15) != 1 || (ack >> 20) != sequence) continue;
+      return error == 0;
+    }
+  }
+  return false;
+}
+uint64_t dcvsBusyTicks() {
+  const uint32_t hi = gmuQuietRd(0x1f845);
+  uint32_t lo = gmuQuietRd(0x1f844);
+  const uint32_t hi2 = gmuQuietRd(0x1f845);
+  if (hi2 != hi) lo = gmuQuietRd(0x1f844);
+  return uint64_t(hi2) << 32 | lo;
+}
+// TSENS v2 (zeus device tree): TM_Sn_STATUS at +0xa0 + 4n, bits 11:0 signed 0.1 C, bit 21 valid. Read only.
+uintptr_t gTsens[2];
+void thermalRead() {
+  auto hottest = [](unsigned c, unsigned first, unsigned last) {
+    int32_t max = 0x7fffffff;
+    for (unsigned i = first; gTsens[c] && i <= last; ++i) {
+      const uint32_t v = rd32(gTsens[c] + 0xa0 + 4 * i);
+      const int32_t t = (int32_t(v & 0xfff) ^ 0x800) - 0x800;
+      if ((v & (1u << 21)) && (max == 0x7fffffff || t > max)) max = t;
+    }
+    return max;
+  };
+  const int32_t now[3] = {hottest(0, 14, 14), hottest(0, 5, 13), hottest(1, 1, 4)};
+  for (unsigned i = 0; i < 3; ++i) {
+    zeus_thermal[i] = now[i];
+    if (now[i] != 0x7fffffff && (zeus_thermal[3 + i] == 0x7fffffff || now[i] > zeus_thermal[3 + i])) zeus_thermal[3 + i] = now[i];
+  }
+}
+void dcvsThread(void *, wait_result_t) {
+  thread_set_thread_name(current_thread(), "zeus-gpu-dcvs");
+  gTsens[0] = mapIo(0x0c263000, 0x1000);
+  gTsens[1] = mapIo(0x0c265000, 0x1000);
+  unsigned on = 0, floor = 3;
+  PE_parse_boot_argn("gpu-dcvs", &on, sizeof on);
+  PE_parse_boot_argn("gpu-dcvs-min", &floor, sizeof floor);
+  const unsigned top = gBootLevel;
+  if (floor < 1) floor = 1;
+  if (floor > top) floor = top;
+  if (on) {
+    gmuQuietWr(0x23b0e, 0xff000000u);
+    gmuQuietWr(0x1f841, (gmuQuietRd(0x1f841) & ~0xffu) | 0x20);
+    gmuQuietWr(0x1f840, 1);
+    zeus_gpu_dcvs[0] = 1;
+  }
+  unsigned cur = top, down = 0, dead = 0, failed = 0, rest = 0, windows = 0;
+  bool moved = false;
+  zeus_gpu_dcvs[1] = cur;
+  uint64_t lastBusy = on ? dcvsBusyTicks() : 0, lastT = mach_absolute_time(), sumBusy = 0, sumNs = 0, at[kDcvsTop + 1] = {};
+  for (unsigned tick = 0;; ++tick) {
+    IOSleep(on ? 16 : 1000);
+    if (!on || !(tick & 63)) thermalRead();
+    if (!on) continue;
+    const uint64_t busy = dcvsBusyTicks(), t = mach_absolute_time();
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(t - lastT, &ns);
+    uint64_t busyNs = (busy - lastBusy) * 625 / 12;   // 52.083 ns per XO tick
+    const bool work = gpuRd(CP_RB_RPTR) != gpuRd(CP_RB_WPTR);
+    lastBusy = busy; lastT = t;
+    if (!ns) continue;
+    if (busyNs > ns) busyNs = ns;
+    if (busyNs * 100 >= ns) moved = true;
+    if (!moved && work && ++dead >= 64) {
+      zeus_gpu_dcvs[0] = 2;
+      dcvsVote(gBootLevel, gBootBw);
+      on = 0;
+      continue;
+    }
+    if (!moved) continue;   // the boot level stays until the counter has shown work
+    sumBusy += busyNs; sumNs += ns; at[cur] += ns; ++windows;
+    const bool active = busyNs * 100 >= ns || work;
+    const uint64_t need = busyNs * kDcvsMHz[cur] * 2 / ns;
+    unsigned want = cur, level = 1;
+    while (level < top && kDcvsMHz[level] < need * 11 / 10) ++level;
+    if (busyNs * 100 > ns * 85) want = top;
+    else if (level > cur) want = level;
+    else if (active) {
+      if (cur > floor && need * 10 <= uint64_t(kDcvsMHz[cur - 1]) * 8) {if (++down >= 4) want = cur - 1;}
+      else down = 0;
+    }
+    rest = active ? 0 : rest + 1;
+    if (rest >= 5) want = floor;
+    if (want < floor) want = floor;
+    if (want != cur) {
+      const unsigned bw = kDcvsBw[want] > gBwCap ? gBwCap : kDcvsBw[want];
+      if (dcvsVote(want, bw)) {cur = want; failed = 0; zeus_gpu_dcvs[1] = cur; zeus_gpu_dcvs[2] = zeus_gpu_dcvs[2] + 1;}
+      else {
+        zeus_gpu_dcvs[3] = zeus_gpu_dcvs[3] + 1;
+        if (++failed >= 8) {zeus_gpu_dcvs[0] = 3; on = 0; continue;}
+      }
+      down = 0;
+    }
+    if (sumNs >= 10000000000ull) {
+      zeus_gpu_dcvs[4] = uint32_t(sumBusy * 100 / sumNs);
+      zeus_gpu_dcvs[5] = windows;
+      for (unsigned l = 1; l <= kDcvsTop; ++l) {zeus_gpu_dcvs[5 + l] = uint32_t(at[l] * 100 / sumNs); at[l] = 0;}
+      sumBusy = sumNs = windows = 0;
+    }
+  }
+}
+void startDcvs() {
+  thread_t thread;
+  if (kernel_thread_start(dcvsThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+}
+
 unsigned gMode, gDelayS = 90;
 void probeThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-gpu-probe");
   IOSleep(gDelayS * 1000);
   run(gMode);
+  if (gMetalStage == 5) startDcvs();   // gpu-dcvs=1 governs; without it the thread only reads the temperatures
   // After a published accelerator: report Metal discovery every 30 s for 10 minutes.
   for (unsigned round = 1; gMetalStage == 5 && round <= 20; ++round) {
     IOSleep(30000);

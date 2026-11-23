@@ -37,6 +37,20 @@ rep("executable=bundle/'SweetNativeMetal'", "executable=bundle/'ZeusNativeMetal'
 rep("CFBundleIdentifier='org.sweet.SweetNativeMetal',\n      CFBundleExecutable='SweetNativeMetal'",
     "CFBundleIdentifier='org.zeus.ZeusNativeMetal',\n      CFBundleExecutable='ZeusNativeMetal'")
 rep("MinimumOSVersion='16.0'", "MinimumOSVersion='26.0'", count=2)
+# zeus quirks (ZeusNativeQuirks.m beside this script, path in ZEUS_QUIRKS): the 23F84 fb-bgra framebuffer branch and CA's env.
+rep("    run(clang,*common,'-c',ROOT/'userspace/native-metal/frontend/SweetMTLArchitecture.m','-o',archobj)\n",
+    "    run(clang,*common,'-c',ROOT/'userspace/native-metal/frontend/SweetMTLArchitecture.m','-o',archobj)\n"
+    "    quirkobj=WORK/'ZeusNativeQuirks.o'\n"
+    "    run(clang,*common,'-fobjc-arc','-c',os.environ['ZEUS_QUIRKS'],'-o',quirkobj)\n")
+rep("    run(clangxx,*flags,'-bundle','-Wl,-dead_strip',frontend,drawable,archobj,backend,",
+    "    run(clangxx,*flags,'-bundle','-Wl,-dead_strip',frontend,drawable,archobj,quirkobj,backend,")
+# zeus: 4 KiB user pages. The frontend's IOSurface import masks the surface base and rounds YCbCr shadows to 16 KiB; the transport
+# (zeus_transport.py) now uses 4 KiB, and both sides must compute the same offsets and sizes.
+rep("    run(clang,*common,'-c',src/'redwooddrawable.m','-o',drawable)\n",
+    "    d=src/'redwooddrawable.m';t=d.read_text()\n"
+    "    if t.count('16383')!=6:raise SystemExit('zeus: the drawable page masks changed')\n"
+    "    d.write_text(t.replace('16383','4095'))   # zeus: 4 KiB user pages\n"
+    "    run(clang,*common,'-c',src/'redwooddrawable.m','-o',drawable)\n")
 # Stop after the main bundle's report: drop the legacy SweetMetal2 alias package.
 cut = s.index("    # Older kernels select this public class/name.")
 end = s.index("\n", s.index("Built ", cut)) if "Built " in s[cut:] else None

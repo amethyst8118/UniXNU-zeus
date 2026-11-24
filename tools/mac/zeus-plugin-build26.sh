@@ -47,6 +47,8 @@ PY
 B=build/adreno-metal-plugin26/NativeAdrenoMetal.bundle
 xcrun vtool -show-build "$B/NativeAdrenoMetal" 2>/dev/null | grep -E "platform|minos" | head -2 || true
 /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$B/Info.plist"
+# make-gpu-addon.py refuses to overwrite: the previous add-on is kept as gpuaddon26-prev.bin.
+[ -e ~/zeus-build/gpuaddon26.bin ] && mv -f ~/zeus-build/gpuaddon26.bin ~/zeus-build/gpuaddon26-prev.bin
 ADRENO_PLUGIN_DIR=build/adreno-metal-plugin26 python3 scripts/make-gpu-addon.py --publish --no-daemon ~/zeus-build/gpuaddon26.bin
 ls -l ~/zeus-build/gpuaddon26.bin; shasum -a 256 ~/zeus-build/gpuaddon26.bin
 echo ZEUS_PLUGIN_OK

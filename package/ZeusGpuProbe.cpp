@@ -80,6 +80,7 @@ struct NativeAdrenoMetalDiagView {
 struct NativeAdrenoOpenRecordView {char name[20]; uint32_t type, macf, res, attach, foreign;};
 extern "C" NativeAdrenoMetalDiagView native_adreno_metal_diag __attribute__((weak));
 extern "C" NativeAdrenoOpenRecordView native_adreno_open_log[8] __attribute__((weak));
+extern "C" volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak));   // LegacyDisplayProbe.cpp
 extern "C" int proc_iterate(unsigned flags, int (*callout)(void *, void *), void *arg, int (*filter)(void *, void *), void *filterarg);
 extern "C" const char *proc_name_address(void *p);
 extern "C" volatile uint32_t native_adreno_open_log_count __attribute__((weak));
@@ -1391,12 +1392,20 @@ void dcvsThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-gpu-dcvs");
   gTsens[0] = mapIo(0x0c263000, 0x1000);
   gTsens[1] = mapIo(0x0c265000, 0x1000);
-  unsigned on = 0, floor = 3;
+  // Two floors: gpu-dcvs-min (default 3, 317 MHz) when nothing is on screen, gpu-dcvs-act (default 8, 599 MHz) while the display took a
+  // new frame in the last 200 ms. The busy target alone is not enough: gpum63's Control Centre ran at 15-25 % GPU busy, so the governor
+  // sat at level 3, and each frame then waited 2.5x longer for its GPU work: every dip to 18-29 swaps/s was at level 3.
+  unsigned on = 0, idleFloor = 3, actFloor = 8;
   PE_parse_boot_argn("gpu-dcvs", &on, sizeof on);
-  PE_parse_boot_argn("gpu-dcvs-min", &floor, sizeof floor);
+  PE_parse_boot_argn("gpu-dcvs-min", &idleFloor, sizeof idleFloor);
+  PE_parse_boot_argn("gpu-dcvs-act", &actFloor, sizeof actFloor);
   const unsigned top = gBootLevel;
-  if (floor < 1) floor = 1;
-  if (floor > top) floor = top;
+  if (idleFloor < 1) idleFloor = 1;
+  if (idleFloor > top) idleFloor = top;
+  if (actFloor < idleFloor) actFloor = idleFloor;
+  if (actFloor > top) actFloor = top;
+  uint32_t lastSwaps = &native_legacy_swap_accepted_count ? native_legacy_swap_accepted_count : 0;
+  unsigned swapAge = 1000;   // 16 ms windows since the display last took a frame
   if (on) {
     gmuQuietWr(0x23b0e, 0xff000000u);
     gmuQuietWr(0x1f841, (gmuQuietRd(0x1f841) & ~0xffu) | 0x20);
@@ -1428,6 +1437,10 @@ void dcvsThread(void *, wait_result_t) {
     }
     if (!moved) continue;   // the boot level stays until the counter has shown work
     sumBusy += busyNs; sumNs += ns; at[cur] += ns; ++windows;
+    const uint32_t swaps = &native_legacy_swap_accepted_count ? native_legacy_swap_accepted_count : 0;
+    swapAge = swaps != lastSwaps ? 0 : swapAge < 1000 ? swapAge + 1 : swapAge;
+    lastSwaps = swaps;
+    const unsigned floor = swapAge < 13 ? actFloor : idleFloor;
     const bool active = busyNs * 100 >= ns || work;
     const uint64_t need = busyNs * kDcvsMHz[cur] * 2 / ns;
     unsigned want = cur, level = 1;

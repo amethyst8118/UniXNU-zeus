@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c	2026-11-21 15:45:30
 +++ b/bsd/kern/kern_exec.c	2026-11-21 15:45:30
-@@ -8951,8 +8951,312 @@
+@@ -8951,8 +8951,314 @@
  	}
  	zeus_migration_rerun_status = error;
  	printf("zeus-data: migration marker removal %d\n", error);
@@ -267,6 +267,8 @@
 +	static const char *const subsystems[] = {
 +		"com.apple.launchservices", "com.apple.frontboard.ApplicationLibrary", "com.apple.FrontBoard", "com.apple.UserManagement",
 +		"com.apple.SpringBoard", "com.apple.installcoordination", "com.apple.containermanager",
++		/* gpum70: icons re-rendered on every home-screen page (IconRendering decoding asset textures, ISIconCache lookups). */
++		"com.apple.iconservices", "com.apple.IconServices", "com.apple.IconRendering",
 +	};
 +	static const char plist[] =
 +	    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -313,7 +315,7 @@
  static int
  native_owner_data_prepare(proc_t p, user_addr_t scratch)
  {
-@@ -8996,6 +9300,8 @@
+@@ -8996,6 +9302,8 @@
  	    (error = copyout("/private/var", request.path, 13)) ||
  	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
  	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
@@ -322,7 +324,7 @@
  	native_owner_data_stage = 2;
  	error = mount(p, &request, &result);
  	if (error) goto done;
-@@ -9012,6 +9318,11 @@
+@@ -9012,6 +9320,11 @@
  	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
  	if (!error) native_owner_data_stage = 4;
  	if (!error) zeus_migration_rerun(p, scratch);

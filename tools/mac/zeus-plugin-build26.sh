@@ -13,6 +13,7 @@ P=~/zeus-build/device/patches/unixnu/0093-adreno-metal-ios26-target.patch
 if git apply --reverse --check "$P" 2>/dev/null; then echo "0093 already applied"; else git apply "$P"; echo "applying 0093"; fi
 # Device-side AdrenoMetal plug-in patches (patches/adrenometal), on a clean submodule checkout.
 git -C drivers/AdrenoMetal reset -q --hard
+git -C drivers/AdrenoMetal clean -qfd   # files a patch adds (0005: ZeusClientQuirks.h) survive a reset
 for p in ~/zeus-build/device/patches/adrenometal/*.patch; do [ -e "$p" ] || continue; echo "applying AdrenoMetal $(basename "$p")"; git -C drivers/AdrenoMetal apply "$p"; done
 # Device-side Mesa patches (patches/mesa): recorded in the Mesa pin list for this build only (restored on exit, the build's
 # patch-identity check needs every Mesa change listed) and applied to the Mesa checkout once.

@@ -1551,11 +1551,16 @@ void ustackThread(void *arg, wait_result_t) {
 // zeus-ustack=<pid> or zeus-ustack=<process name>: read from the command line itself (PE_boot_args), so a name works.
 void startUstack() {
   const char *args = PE_boot_args();
-  const char *at = args ? strstr(args, "zeus-ustack=") : nullptr;
-  if (!at || (at != args && at[-1] != ' ')) return;
+  static const char kKey[] = "zeus-ustack=";
+  const size_t keyLen = sizeof kKey - 1;
+  const char *at = nullptr;
+  // The kernel has no strstr/strcspn: find "zeus-ustack=" at the start of the line or after a space by hand.
+  for (const char *c = args; c && *c && !at; ++c)
+    if ((c == args || c[-1] == ' ') && !strncmp(c, kKey, keyLen)) at = c + keyLen;
+  if (!at) return;
   static UstackTarget target;
-  at += strlen("zeus-ustack=");
-  size_t len = strcspn(at, " ");
+  size_t len = 0;
+  while (at[len] && at[len] != ' ') ++len;
   if (!len) return;
   if (len >= sizeof target.name) len = sizeof target.name - 1;
   memcpy(target.name, at, len);

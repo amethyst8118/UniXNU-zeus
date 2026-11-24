@@ -1445,7 +1445,12 @@ void dcvsThread(void *, wait_result_t) {
 void startDcvs() {
   thread_t thread;
   if (kernel_thread_start(dcvsThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
-  if (kernel_thread_start(topThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+  // The #top thread is opt-in (zeus-top=1). With it on, gpum37/38/39 logged a negative attrlistbulk time on the system volume
+  // ("disk7s1 Spent too much time (18446744073709)s ... stop iterating") and SpringBoard stalled at the Apple logo. gpum40
+  // (gpum39 without gpu-dcvs=1, so no #top thread) reached the home screen.
+  unsigned top = 0;
+  PE_parse_boot_argn("zeus-top", &top, sizeof(top));
+  if (top && kernel_thread_start(topThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
 unsigned gMode, gDelayS = 90;

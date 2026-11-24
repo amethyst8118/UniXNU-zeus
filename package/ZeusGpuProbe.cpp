@@ -96,6 +96,14 @@ extern "C" volatile uint32_t armsmmu4k_mismatch[20] __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_io_coherent __attribute__((weak));
 extern "C" volatile uint32_t native_adreno_walk_coherent[3] __attribute__((weak));
 extern "C" {char native_gpu_coherence_row[120]; uint32_t native_gpu_coherence[8]; char native_gpu_walk_row[80];}
+extern "C" {
+// [0] 1 running 2 counter dead 3 votes failing, [1] level, [2] changes, [3] failed votes, [4] busy % of the last 10 s, [5] windows in 10 s,
+// [6..17] % of those 10 s at levels 1..12
+volatile uint32_t zeus_gpu_dcvs[18];
+// Die temperatures in 0.1 C: [0] GPU (c263000 #14), [1] hottest performance/prime core (c263000 #5..#13), [2] hottest efficiency core
+// (c265000 #1..#4), [3..5] their peaks. 0x7fffffff: not read.
+volatile int32_t zeus_thermal[6] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
+}
 // patches/armsmmu4k/0002: the SMR mask the kit gives its owned streams.
 extern "C" volatile uint16_t armsmmu4k_smr_mask __attribute__((weak));
 
@@ -1004,8 +1012,16 @@ void coherenceProbe(NativeAdrenoVm *vm) {
 void openCpAperture() {
   uint64_t answer = 0;
   const int64_t available = scmCall("CP aperture available", 0x42000601, 1, 0x02000000u | (0x0cu << 8) | 0x1bu, 0, 0, &answer);
-  if (available || !answer) {printf("ZEUS GPU: CP aperture call unavailable\n"); return;}
-  scmCall("CP aperture", 0x42000c1b, 4, 0xffff0000u, 0xffffffffu, 0xffffffffu, &answer, 0xffffffffu);
+  // The driver picks CP table switching (mode 2) from these words; unset they read as "unavailable" and every change of process drains
+  // the GPU (mode 1: gpum34 3255 switches). As sheng: [0] availability, [1] the call's x0. gpu-ttbr=1 keeps mode 1.
+  if (&native_adreno_cp_aperture) native_adreno_cp_aperture[0] = available ? 0x80000000u | uint32_t(available) : uint32_t(answer);
+  if (available || !answer) {
+    if (&native_adreno_cp_aperture) native_adreno_cp_aperture[1] = 0xffffffffu;
+    printf("ZEUS GPU: CP aperture call unavailable\n");
+    return;
+  }
+  const int64_t opened = scmCall("CP aperture", 0x42000c1b, 4, 0xffff0000u, 0xffffffffu, 0xffffffffu, &answer, 0xffffffffu);
+  if (&native_adreno_cp_aperture) native_adreno_cp_aperture[1] = uint32_t(opened);
 }
 // gpu-metal=1 (with gpu-power=8): after DRIVER PUBLISHED, publish the staged accelerator for Metal's device discovery, as sheng's
 // publishMetal. Stages: 1 started, 2 IOAcceleratorES (136 bytes) found, 3 own class registered, 4 object made with its keys, 5 published.
@@ -1235,14 +1251,6 @@ void run(unsigned mode) {
 // gpu-level. Each level's bandwidth is the zeus device tree's qcom,bus-freq, at most gpu-dcvs-bw (default 11). A busy counter that never
 // moves while the ring holds work (64 windows) puts the boot level back and ends the governor. A failed vote is counted, and eight in a
 // row end it. Nothing here prints: ioWrite and hfiSend do, and the console is slow.
-extern "C" {
-// [0] 1 running 2 counter dead 3 votes failing, [1] level, [2] changes, [3] failed votes, [4] busy % of the last 10 s, [5] windows in 10 s,
-// [6..17] % of those 10 s at levels 1..12
-volatile uint32_t zeus_gpu_dcvs[18];
-// Die temperatures in 0.1 C: [0] GPU (c263000 #14), [1] hottest performance/prime core (c263000 #5..#13), [2] hottest efficiency core
-// (c265000 #1..#4), [3..5] their peaks. 0x7fffffff: not read.
-volatile int32_t zeus_thermal[6] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
-}
 constexpr unsigned kDcvsTop = 12;
 constexpr uint32_t kDcvsMHz[kDcvsTop + 1] = {0, 220, 285, 317, 350, 421, 492, 545, 599, 640, 734, 791, 818};
 constexpr uint8_t kDcvsBw[kDcvsTop + 1] = {0, 2, 2, 2, 3, 6, 6, 8, 8, 10, 10, 11, 11};

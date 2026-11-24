@@ -3,6 +3,7 @@ zeus-panic-after.patch
 zeus-owner-cache-diag.patch
 zeus-initproc-crash.patch
 zeus-sheng-kernel-fixes.patch
+zeus-dyld-pager-source-release.patch
 zeus-smp-poc-cleans.patch
 zeus-smp-kernel-clean.patch
 zeus-no-bulk-setway.patch

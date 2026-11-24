@@ -115,7 +115,7 @@ struct task *proc_task(struct proc *p);
 // without crashing (gpum42: SpringBoard's main thread silent from 81.7 s with the R2507 plug-in). Only that one process is touched,
 // unlike #top's walk over every task.
 extern "C" {
-char zeus_ustack_row[440];
+char zeus_ustack_rows[16][200];   // #ustack (row 0) and #ust1..#ust15: one thread each
 struct proc *proc_find(int pid);
 int proc_rele(struct proc *p);
 void task_act_iterate_wth_args(task_t task, void (*func)(thread_t, void *), void *arg);
@@ -1457,66 +1457,115 @@ void dcvsThread(void *, wait_result_t) {
 }
 // The saved user state of a thread (struct arm_saved_state: an 8-byte header, then arm_saved_state64 x[29], fp, lr, sp, pc). Read in
 // task_act_iterate_wth_args' callback, under the task lock: only plain loads, no faults. The first thread iterated is the main thread.
-struct UstackRegs {unsigned threads; uint64_t x0, x1, x16, fp, lr, sp, pc;};
+// Every thread (up to kUstackThreads) is kept: a process stuck on a dispatch queue waits on a worker thread, not on its main thread
+// (gpum47: liveactivitiesd went quiet while SpringBoard's main thread waited on its reply).
+constexpr unsigned kUstackThreads = 16, kUstackFrames = 12;
+struct UstackThread {uint64_t x16, fp, lr, sp, pc;};
+struct UstackRegs {unsigned threads; UstackThread t[kUstackThreads];};
 void ustackOne(thread_t thread, void *arg) {
   UstackRegs *r = static_cast<UstackRegs *>(arg);
-  if (r->threads++) return;
+  const unsigned i = r->threads++;
+  if (i >= kUstackThreads) return;
   const uint8_t *s = static_cast<const uint8_t *>(find_user_regs(thread));
   if (!s) return;
   const uint64_t *x = reinterpret_cast<const uint64_t *>(s + 8);
-  r->x0 = x[0]; r->x1 = x[1]; r->x16 = x[16]; r->fp = x[29]; r->lr = x[30]; r->sp = x[31]; r->pc = x[32];
+  r->t[i] = {x[16], x[29], x[30], x[31], x[32]};
 }
+struct UstackFind {const char *name; int pid;};
+int ustackFindOne(void *p, void *arg) {
+  UstackFind *f = static_cast<UstackFind *>(arg);
+  const char *n = proc_name_address(p);
+  if (!f->pid && n && !strncmp(n, f->name, 16)) f->pid = proc_pid(static_cast<struct proc *>(p));
+  return 0;   // PROC_RETURNED
+}
+// The target: a pid, or a process name (MAXCOMLEN, 16 characters) looked up again whenever the pid it had is gone or renamed.
+struct UstackTarget {char name[20]; int pid; bool byName;};
 void ustackThread(void *arg, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-ustack");
-  const int pid = static_cast<int>(reinterpret_cast<uintptr_t>(arg));
+  UstackTarget *target = static_cast<UstackTarget *>(arg);
   const uint64_t kUser = 0x0000000fffffffffULL;   // user addresses below 64 GiB; strips PAC bits
   unsigned same = 0;
-  uint64_t lastPc = 0;
+  uint64_t lastPcs = 0;
+  static UstackRegs r;
   for (;;) {
     IOSleep(10000);
-    struct proc *p = proc_find(pid);
+    struct proc *p = target->pid ? proc_find(target->pid) : nullptr;
+    if (p && target->byName) {
+      const char *n = proc_name_address(p);
+      if (!n || strncmp(n, target->name, 16)) {proc_rele(p); p = nullptr;}
+    }
+    if (!p && target->byName) {
+      UstackFind f{target->name, 0};
+      proc_iterate(1 /* PROC_ALLPROCLIST */, ustackFindOne, &f, nullptr, nullptr);
+      target->pid = f.pid;
+      p = f.pid ? proc_find(f.pid) : nullptr;
+    }
     if (!p) continue;
     task_t task = reinterpret_cast<task_t>(proc_task(p));
-    UstackRegs r{};
     char name[20] = "?";
     if (const char *n = proc_name_address(p)) strlcpy(name, n, sizeof name);
-    uint64_t frames[22];
-    unsigned nf = 0;
+    memset(&r, 0, sizeof r);
+    uint64_t frames[kUstackThreads][kUstackFrames] = {};
+    unsigned nf[kUstackThreads] = {};
     if (task) {
       task_act_iterate_wth_args(task, ustackOne, &r);
       vm_map_t map = get_task_map_reference(task);
-      uint64_t fp = r.fp & kUser;
-      while (map && fp && !(fp & 7) && nf < 22) {
-        uint64_t pair[2] = {};
-        if (vm_map_read_user(map, fp, pair, sizeof pair) != KERN_SUCCESS) break;
-        frames[nf++] = pair[1] & kUser;
-        const uint64_t next = pair[0] & kUser;
-        if (next <= fp) break;
-        fp = next;
+      for (unsigned t = 0; map && t < r.threads && t < kUstackThreads; ++t) {
+        uint64_t fp = r.t[t].fp & kUser;
+        while (fp && !(fp & 7) && nf[t] < kUstackFrames) {
+          uint64_t pair[2] = {};
+          if (vm_map_read_user(map, fp, pair, sizeof pair) != KERN_SUCCESS) break;
+          frames[t][nf[t]++] = pair[1] & kUser;
+          const uint64_t next = pair[0] & kUser;
+          if (next <= fp) break;
+          fp = next;
+        }
       }
       if (map) vm_map_deallocate(map);
     }
     proc_rele(p);
-    same = (r.pc & kUser) == lastPc ? same + 1 : 0;
-    lastPc = r.pc & kUser;
+    uint64_t pcs = 0;
+    for (unsigned t = 0; t < r.threads && t < kUstackThreads; ++t) pcs = pcs * 31 + (r.t[t].pc & kUser);
+    same = pcs == lastPcs ? same + 1 : 0;
+    lastPcs = pcs;
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    char row[sizeof zeus_ustack_row];
-    int n = snprintf(row, sizeof row, "#ustack %d %s up %llus thr %u same %u x16 %lld x0 %llx x1 %llx pc %llx lr %llx sp %llx |", pid, name,
-                     static_cast<unsigned long long>(ns / 1000000000ULL), r.threads, same, static_cast<long long>(r.x16),
-                     static_cast<unsigned long long>(r.x0), static_cast<unsigned long long>(r.x1), static_cast<unsigned long long>(r.pc & kUser),
-                     static_cast<unsigned long long>(r.lr & kUser), static_cast<unsigned long long>(r.sp & kUser));
-    for (unsigned i = 0; i < nf && n > 0 && n < int(sizeof row) - 12; ++i)
-      n += snprintf(row + n, sizeof row - n, " %llx", static_cast<unsigned long long>(frames[i]));
-    strlcpy(zeus_ustack_row, row, sizeof zeus_ustack_row);
+    const unsigned shown = r.threads < kUstackThreads ? r.threads : kUstackThreads;
+    for (unsigned t = 0; t < kUstackThreads; ++t) {
+      char row[sizeof zeus_ustack_rows[0]];
+      row[0] = 0;
+      if (t < shown) {
+        const UstackThread &u = r.t[t];
+        int n = t ? snprintf(row, sizeof row, "#ust%u x16 %lld pc %llx lr %llx |", t, static_cast<long long>(u.x16),
+                             static_cast<unsigned long long>(u.pc & kUser), static_cast<unsigned long long>(u.lr & kUser))
+                  : snprintf(row, sizeof row, "#ustack %d %s up %llus thr %u same %u | #ust0 x16 %lld pc %llx lr %llx |", target->pid, name,
+                             static_cast<unsigned long long>(ns / 1000000000ULL), r.threads, same, static_cast<long long>(u.x16),
+                             static_cast<unsigned long long>(u.pc & kUser), static_cast<unsigned long long>(u.lr & kUser));
+        for (unsigned i = 0; i < nf[t] && n > 0 && n < int(sizeof row) - 12; ++i)
+          n += snprintf(row + n, sizeof row - n, " %llx", static_cast<unsigned long long>(frames[t][i]));
+      }
+      strlcpy(zeus_ustack_rows[t], row, sizeof zeus_ustack_rows[t]);
+    }
   }
 }
+// zeus-ustack=<pid> or zeus-ustack=<process name>: read from the command line itself (PE_boot_args), so a name works.
 void startUstack() {
-  unsigned pid = 0;
-  if (!PE_parse_boot_argn("zeus-ustack", &pid, sizeof(pid)) || !pid) return;
+  const char *args = PE_boot_args();
+  const char *at = args ? strstr(args, "zeus-ustack=") : nullptr;
+  if (!at || (at != args && at[-1] != ' ')) return;
+  static UstackTarget target;
+  at += strlen("zeus-ustack=");
+  size_t len = strcspn(at, " ");
+  if (!len) return;
+  if (len >= sizeof target.name) len = sizeof target.name - 1;
+  memcpy(target.name, at, len);
+  target.name[len] = 0;
+  bool digits = true;
+  for (size_t i = 0; i < len; ++i) digits = digits && target.name[i] >= '0' && target.name[i] <= '9';
+  target.byName = !digits;
+  if (digits) {target.pid = 0; for (size_t i = 0; i < len; ++i) target.pid = target.pid * 10 + (target.name[i] - '0');}
   thread_t thread;
-  if (kernel_thread_start(ustackThread, reinterpret_cast<void *>(static_cast<uintptr_t>(pid)), &thread) == KERN_SUCCESS)
-    thread_deallocate(thread);
+  if (kernel_thread_start(ustackThread, &target, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 void startDcvs() {
   thread_t thread;

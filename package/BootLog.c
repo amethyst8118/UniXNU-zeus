@@ -42,7 +42,7 @@ extern int native_ufs_log_sync(void) __attribute__((weak_import));
 extern volatile uint32_t zeus_gpu_dcvs[18] __attribute__((weak_import));
 extern volatile int32_t zeus_thermal[6] __attribute__((weak_import));
 extern char zeus_top_row[280] __attribute__((weak_import));
-extern char zeus_ustack_row[440] __attribute__((weak_import));
+extern char zeus_ustack_rows[16][200] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_rejected_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_rej_reason __attribute__((weak_import));
@@ -1389,7 +1389,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // '#' rows pass every log group filter; a new [name] row is dropped by it (gpum34 and gpum35 had no [zeus gpu] row for that).
   if (&zeus_top_row && zeus_top_row[0]) at = put(out, at, cap, zeus_top_row, sizeof zeus_top_row);
-  if (&zeus_ustack_row && zeus_ustack_row[0]) at = put(out, at, cap, zeus_ustack_row, sizeof zeus_ustack_row);
+  if (&zeus_ustack_rows) for (unsigned i = 0; i < 16; ++i) if (zeus_ustack_rows[i][0]) at = put(out, at, cap, zeus_ustack_rows[i], sizeof zeus_ustack_rows[i]);
   // #zgpu: the clock governor and die temperatures (ZeusGpuProbe.cpp), then the display swaps accepted.
   if (&zeus_gpu_dcvs && &zeus_thermal) {
     char row[300];

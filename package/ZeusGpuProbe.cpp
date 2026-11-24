@@ -1460,7 +1460,10 @@ void dcvsThread(void *, wait_result_t) {
 // Every thread (up to kUstackThreads) is kept: a process stuck on a dispatch queue waits on a worker thread, not on its main thread
 // (gpum47: liveactivitiesd went quiet while SpringBoard's main thread waited on its reply).
 constexpr unsigned kUstackThreads = 16, kUstackFrames = 12;
-struct UstackThread {uint64_t x16, fp, lr, sp, pc;};
+// far/esr (arm_saved_state64 after pc and cpsr/reserved): the fault address and syndrome of a thread that entered the kernel by an
+// exception (gpum52: securityd's threads stopped for minutes on objc_msgSend+8, objc_alloc+4 … with x16 garbage: a page fault that
+// never completes).
+struct UstackThread {uint64_t x16, fp, lr, sp, pc, far, esr;};
 struct UstackRegs {unsigned threads; UstackThread t[kUstackThreads];};
 void ustackOne(thread_t thread, void *arg) {
   UstackRegs *r = static_cast<UstackRegs *>(arg);
@@ -1469,7 +1472,7 @@ void ustackOne(thread_t thread, void *arg) {
   const uint8_t *s = static_cast<const uint8_t *>(find_user_regs(thread));
   if (!s) return;
   const uint64_t *x = reinterpret_cast<const uint64_t *>(s + 8);
-  r->t[i] = {x[16], x[29], x[30], x[31], x[32]};
+  r->t[i] = {x[16], x[29], x[30], x[31], x[32], x[34], x[35]};
 }
 struct UstackFind {const char *name; int pid;};
 int ustackFindOne(void *p, void *arg) {
@@ -1536,10 +1539,15 @@ void ustackThread(void *arg, wait_result_t) {
       row[0] = 0;
       if (t < shown) {
         const UstackThread &u = r.t[t];
-        int n = t ? snprintf(row, sizeof row, "#ust%u x16 %lld pc %llx lr %llx |", t, static_cast<long long>(u.x16),
+        // A thread in a system call shows x16 (the call); one that entered by an exception shows the fault address and syndrome.
+        const bool syscall = static_cast<long long>(u.x16) > -10000 && static_cast<long long>(u.x16) < 10000;
+        char what[64];
+        if (syscall) snprintf(what, sizeof what, "x16 %lld", static_cast<long long>(u.x16));
+        else snprintf(what, sizeof what, "far %llx esr %llx", static_cast<unsigned long long>(u.far), static_cast<unsigned long long>(u.esr));
+        int n = t ? snprintf(row, sizeof row, "#ust%u %s pc %llx lr %llx |", t, what,
                              static_cast<unsigned long long>(u.pc & kUser), static_cast<unsigned long long>(u.lr & kUser))
-                  : snprintf(row, sizeof row, "#ustack %d %s up %llus thr %u same %u | #ust0 x16 %lld pc %llx lr %llx |", target->pid, name,
-                             static_cast<unsigned long long>(ns / 1000000000ULL), r.threads, same, static_cast<long long>(u.x16),
+                  : snprintf(row, sizeof row, "#ustack %d %s up %llus thr %u same %u | #ust0 %s pc %llx lr %llx |", target->pid, name,
+                             static_cast<unsigned long long>(ns / 1000000000ULL), r.threads, same, what,
                              static_cast<unsigned long long>(u.pc & kUser), static_cast<unsigned long long>(u.lr & kUser));
         for (unsigned i = 0; i < nf[t] && n > 0 && n < int(sizeof row) - 12; ++i)
           n += snprintf(row + n, sizeof row - n, " %llx", static_cast<unsigned long long>(frames[t][i]));

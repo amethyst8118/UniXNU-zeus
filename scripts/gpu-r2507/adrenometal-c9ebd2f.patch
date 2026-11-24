@@ -270,21 +270,65 @@ index 0000000..741d3aa
 +}  // namespace zeusdl
 diff --git a/bridge/patches/0065-zeus-read-pages-on-ios.patch b/bridge/patches/0065-zeus-read-pages-on-ios.patch
 new file mode 100644
-index 0000000..8e4bd86
+index 0000000..ef95cf7
 --- /dev/null
 +++ b/bridge/patches/0065-zeus-read-pages-on-ios.patch
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,58 @@
 +diff --git a/crates/metal2vulkan-runtime/src/copied.rs b/crates/metal2vulkan-runtime/src/copied.rs
 +--- a/crates/metal2vulkan-runtime/src/copied.rs
 ++++ b/crates/metal2vulkan-runtime/src/copied.rs
-+@@ -2640,8 +2640,8 @@
-+     true
++@@ -2669,6 +2669,13 @@
++     answer == libc::KERN_SUCCESS && read == into.len() as u64
 + }
 + 
-+-/// [`read_pages`] on macOS.
-+-#[cfg(target_os = "macos")]
-++/// [`read_pages`] on macOS and iOS.
-++#[cfg(any(target_os = "macos", target_os = "ios"))]
-+ pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
-+     unsafe extern "C" {
-+         /// `<mach/mach_init.h>`: the port of this process's task.
+++/// [`read_pages`] on iOS: the system is not asked (a sandboxed render server may be killed for it) and nothing is copied,
+++/// as in 555b13d5.
+++#[cfg(target_os = "ios")]
+++pub(crate) fn read_pages(_pages: NonNull<u8>, _into: &mut [u8]) -> bool {
+++    false
+++}
+++
++ /// [`read_pages`] on Windows: `ReadProcessMemory` of the process's own pages, which answers a
++ /// page it cannot read with a failure.
++ #[cfg(windows)]
++diff --git a/crates/metal2vulkan-runtime/src/device/submit_stalls.rs b/crates/metal2vulkan-runtime/src/device/submit_stalls.rs
++--- a/crates/metal2vulkan-runtime/src/device/submit_stalls.rs
+++++ b/crates/metal2vulkan-runtime/src/device/submit_stalls.rs
++@@ -261,7 +261,12 @@
++ /// kernel and user times, `GetThreadTimes`, in 100 ns units, which the system charges at its
++ /// clock's ticks); `None` where it cannot be read.
++ pub(crate) fn thread_cpu() -> Option<u64> {
++-    #[cfg(unix)]
+++    // zeus: iOS 26 backboardd's sandbox kills the process for thread_selfusage (syscall 482).
+++    #[cfg(target_os = "ios")]
+++    {
+++        None
+++    }
+++    #[cfg(all(unix, not(target_os = "ios")))]
++     {
++         let mut now = libc::timespec {
++             tv_sec: 0,
++diff --git a/crates/metal2vulkan-runtime/src/shader_cache/chunks.rs b/crates/metal2vulkan-runtime/src/shader_cache/chunks.rs
++--- a/crates/metal2vulkan-runtime/src/shader_cache/chunks.rs
+++++ b/crates/metal2vulkan-runtime/src/shader_cache/chunks.rs
++@@ -225,6 +225,10 @@
++         bytes: &[u8],
++         put: impl FnOnce(&[u8]) -> io::Result<u64>,
++     ) -> io::Result<u64> {
+++        // zeus: no flock in iOS 26 backboardd's sandbox (syscall 131); the record goes whole, as while a cleanup holds the lock.
+++        if cfg!(target_os = "ios") {
+++            return put(bytes);
+++        }
++         let lock = self.lock()?;
++         match lock.try_lock_shared() {
++             Ok(()) => {}
++@@ -370,6 +374,9 @@
++         retired: &[[u8; 8]],
++         stop: &AtomicBool,
++     ) -> Option<u64> {
+++        if cfg!(target_os = "ios") {
+++            return None;
+++        }
++         let lock = self.lock().ok()?;
++         lock.try_lock().ok()?;
++         let manifests = self.manifests(content, retired, stop)?;

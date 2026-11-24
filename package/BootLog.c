@@ -580,10 +580,20 @@ static void diag_thread(void *arg, wait_result_t wait) {
 
 static uint64_t log_ticks(void) {uint64_t v; __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(v)); return v;}
 
+// log-live=1: the frame, GPU, CPU and thermal rows of every round also go to the kernel log, so the USB serial log
+// (zeusacm=1, tools/scripts/zeus_acm_log.py) carries them live; tools/scripts/zeus_live.py turns them into per-interval rates.
+static uint32_t log_live_on;
+static const char *const live_prefixes[] = {"#zgpu ", "#cpu gov", "#cpu throttle", "#top", "G commit", "H frame-", "RM ", "[gpu jobs]",
+                                            "[gpu recovery]"};
+static void live_row(const char *text, size_t n) {
+  for (size_t i = 0; i < sizeof live_prefixes / sizeof live_prefixes[0]; ++i)
+    if (!strncmp(text, live_prefixes[i], strlen(live_prefixes[i]))) {printf("@live %.*s\n", (int)n, text); return;}
+}
 // Appends a text row without its trailing blanks; returns the new length (never past cap - 1).
 static size_t put(char *out, size_t at, size_t cap, const char *text, size_t max) {
   size_t n = strnlen(text, max);
   while (n && (text[n - 1] == ' ' || text[n - 1] == 0)) --n;
+  if (log_live_on && n) live_row(text, n);
   for (size_t i = 0; i < n && at + 2 < cap; ++i) {char c = text[i]; out[at++] = (c >= 32 && c < 127) ? c : '?';}
   if (at + 1 < cap) out[at++] = '\n';
   return at;
@@ -2763,6 +2773,8 @@ static void log_groups_read(void) {
   for (unsigned g = 0; g < LogGroups; ++g) {uint32_t v = 0; if (PE_parse_boot_argn(log_group_arg[g], &v, sizeof v) && v == 1) log_group_on |= 1u << g;}
   log_gpu_on = !!(log_group_on & (1u << LogGpu));
   log_display_on = !!(log_group_on & (1u << LogDisplay));
+  uint32_t live = 0;
+  log_live_on = PE_parse_boot_argn("log-live", &live, sizeof live) && live == 1;
 }
 // Drops, in place, the sections of the groups that are off; returns the new length.
 static size_t log_groups_filter(char *text, size_t length) {

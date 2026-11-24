@@ -1,0 +1,25 @@
+--- a/NativeAdrenoMetalPlugin.mm
++++ b/NativeAdrenoMetalPlugin.mm
+@@ -356,6 +356,22 @@
+         // by Mesa's option parser): with it the BV thread bins a pass while BR still renders the one before. tu-cb=1 turns it on.
+         // It stays at Mesa's default, off: what it gains here was never measured.
+         if (bootArgSet("tu-cb=1")) setenv("tu_allow_concurrent_binning", "true", 0);
++        // zeus (patches/adrenometal/0006): Turnip's autotuner times each pass both ways, tile memory and system memory, and keeps the
++        // faster (TU_AUTOTUNE_ALGO=profiled), instead of estimating bandwidth (its default). gpum46 (gpu-trace=1) showed 85 % of the
++        // render server's GPU time in screen-size passes, 91 % of that loading and storing the whole 3.16 Mpx target in tile memory
++        // (0.38 ms even for one draw), and the bandwidth estimate put 50009 passes in tile memory against 2558 in system memory.
++        // tu-at=<bandwidth|profiled|profiled_imm|prefer_sysmem|prefer_gmem> picks another of Mesa's algorithms.
++        {
++            char value[24] = "profiled";
++            char args[1100] = {};
++            size_t size = sizeof args - 1;
++            if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) == 0)
++                if (const char *at = bootArgToken(args, "tu-at=")) {
++                    strlcpy(value, at + strlen("tu-at="), sizeof value);
++                    value[strcspn(value, " ")] = 0;
++                }
++            setenv("TU_AUTOTUNE_ALGO", value, 1);
++        }
+         // diag=1 turns on every diagnostic of the GPU stack in this process: the frontend's frame trace, Turnip's pass stamps and
+         // submission ring, the runtime's stage ring, and in the render server the status and telemetry lines. Without it none of them runs.
+         if (bootArgSet("diag=1") || bootArgSet("gpu-trace=1")) setenv("SHENG_DIAG", "1", 1);

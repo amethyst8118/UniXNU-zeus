@@ -74,7 +74,7 @@ index ee72363..c0dd0f1 100644
                  char list[1024];
                  prime::run((id<MTLDevice>)device, gCacheDirectory, 90,
 diff --git a/NativeBridgeMetalFrontend.mm b/NativeBridgeMetalFrontend.mm
-index df72c78..836e6bc 100644
+index df72c78..27a911c 100644
 --- a/NativeBridgeMetalFrontend.mm
 +++ b/NativeBridgeMetalFrontend.mm
 @@ -3618,12 +3618,20 @@ - (void)finish {
@@ -114,6 +114,23 @@ index df72c78..836e6bc 100644
   if(!handle){NBLOG(@"native-metal: heap refused: %@",lastError());return nil;}
   NBHeap *heap=[NBHeap new];heap.handle=handle;heap.options=d.resourceOptions;heap.heapType=d.type;return (id<MTLHeap>)heap;
  }
+@@ -5294,15 +5306,7 @@ static void logClientMemory() {
+  if(gDeviceObject)return gDeviceObject;
+  gMissing=missing;gInFlight=[NSMutableSet set];
+  if(cache && *cache){configureShaderDiskCache(cache);gCacheRoot=cache;}
+- const bool renderStderr=diagOn() && nativeIsRenderServer();
+- if(diagOn() && !gCacheRoot.empty() && (renderStderr || (getenv("NATIVE_METAL_DUMP_CB") && !strcmp(getprogname(),"iconservicesagent")))) {
+-  const std::string path=gCacheRoot+"/runtime-stderr.log";
+-  const int fd=open(path.c_str(),O_WRONLY|O_CREAT|(renderStderr?O_APPEND:O_TRUNC)|O_CLOEXEC|O_NOFOLLOW,0600);
+-  if(fd>=0) {
+-   dprintf(fd,"native-metal runtime stderr boot=%s pid=%d\n",getenv("NATIVE_METAL_BOOT_SESSION")?:"unknown",getpid());
+-   if(fd!=STDERR_FILENO){dup2(fd,STDERR_FILENO);close(fd);}
+-  }
+- }
++ // zeus: no stderr file (diag=1). iOS 26's backboardd sandbox kills the process for dup2 (gpum36).
+  gDevice=nmb_device_open(loader,cache);
+  if(loader)gLoaderPath=loader;
+  if(diagOn() && loader) {
 diff --git a/ZeusClientQuirks.h b/ZeusClientQuirks.h
 new file mode 100644
 index 0000000..741d3aa

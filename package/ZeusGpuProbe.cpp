@@ -116,6 +116,9 @@ struct task *proc_task(struct proc *p);
 // unlike #top's walk over every task.
 extern "C" {
 char zeus_ustack_rows[16][200];   // #ustack (row 0) and #ust1..#ust15: one thread each
+char zeus_ustack_fault[2][220];   // #ustf: the VM region under each distinct fault address of the target's threads
+kern_return_t mach_vm_region(vm_map_t map, mach_vm_offset_t *address, mach_vm_size_t *size, int flavor, int *info,
+                             mach_msg_type_number_t *count, mach_port_t *object_name);
 struct proc *proc_find(int pid);
 int proc_rele(struct proc *p);
 void task_act_iterate_wth_args(task_t task, void (*func)(thread_t, void *), void *arg);
@@ -1523,6 +1526,30 @@ void ustackThread(void *arg, wait_result_t) {
           if (next <= fp) break;
           fp = next;
         }
+      }
+      // The VM region under each distinct 16 KiB page that exception-entry threads faulted on (VM_REGION_EXTENDED_INFO, flavor 13:
+      // protection, user_tag, pages_resident, pages_shared_now_private, pages_swapped_out, pages_dirtied, ref_count, shadow_depth,
+      // external_pager, share_mode, pages_reusable).
+      uint64_t pages[2] = {}; unsigned np = 0;
+      for (unsigned t = 0; t < r.threads && t < kUstackThreads && np < 2; ++t) {
+        const long long x16 = static_cast<long long>(r.t[t].x16);
+        if (x16 > -10000 && x16 < 10000) continue;
+        const uint64_t page = (r.t[t].far & kUser) & ~0x3fffULL;
+        if (!page || (np && pages[0] == page)) continue;
+        pages[np++] = page;
+      }
+      for (unsigned i = 0; i < 2; ++i) zeus_ustack_fault[i][0] = 0;
+      for (unsigned i = 0; map && i < np; ++i) {
+        mach_vm_offset_t addr = pages[i];
+        mach_vm_size_t size = 0;
+        int info[16] = {};
+        mach_msg_type_number_t count = 11;   // VM_REGION_EXTENDED_INFO_COUNT
+        mach_port_t name = 0;
+        const kern_return_t kr = mach_vm_region(map, &addr, &size, 13, info, &count, &name);
+        snprintf(zeus_ustack_fault[i], sizeof zeus_ustack_fault[i],
+                 "#ustf page %llx kr %d region %llx+%llx prot %d tag %d res %d private %d swapped %d dirty %d ref %d shadow %d ext %d share %d",
+                 static_cast<unsigned long long>(pages[i]), kr, static_cast<unsigned long long>(addr), static_cast<unsigned long long>(size),
+                 info[0], info[1], info[2], info[3], info[4], info[5], info[6], info[7], info[8], info[9]);
       }
       if (map) vm_map_deallocate(map);
     }

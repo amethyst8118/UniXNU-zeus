@@ -1,0 +1,273 @@
+diff --git a/NativeAdrenoMetalPlugin.mm b/NativeAdrenoMetalPlugin.mm
+index ee72363..c0dd0f1 100644
+--- a/NativeAdrenoMetalPlugin.mm
++++ b/NativeAdrenoMetalPlugin.mm
+@@ -216,6 +216,7 @@ static void clientFailure(unsigned port, const char *step, const char *detail) {
+             }
+     }
+ }
++#include "ZeusClientQuirks.h"
+ static id clientDevice(unsigned port) {
+     char turnip[1024];
+     if (!turnip::libraryPath(turnip, sizeof turnip) || access(turnip, R_OK) != 0) {clientFailure(port, "no-turnip", ""); return nil;}
+@@ -234,14 +235,16 @@ static id clientDevice(unsigned port) {
+         return native_bridge_metal_open(turnip, root.c_str(), registryID, nullptr);
+     }
+ #endif
+-    char candidates[3][512] = {};
++    char candidates[4][512] = {};
+     if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
+     if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
+     strlcpy(candidates[2], sharedShaderCacheDirectory().c_str(), sizeof candidates[2]);
++    zeusPersistentClientCache(candidates[3], sizeof candidates[3] - 16);
++    zeusSystemLayer();
+     id device = nil;
+     const char *lastError = "";
+     unsigned usable = 0;
+-    for (unsigned i : {2u, 0u, 1u}) {
++    for (unsigned i : {2u, 3u, 0u, 1u}) {
+         if (device) break;
+         if (!candidates[i][0]) continue;
+         // In the user cache directory the cache sits inside Metal's own shader cache directory (com.apple.metal): a sandboxed process may
+@@ -518,8 +521,24 @@ static id deviceForPort(unsigned port) {
+         setenv("CA_FP16_MIN_HEADROOM", "1e30", 1);
+         setenv("CA_ALLOW_EDR_MIRRORING", "0", 1);
+ #if !TARGET_OS_OSX
+-        // The stored option values and the framebuffer branch are addresses of iPadOS 27's QuartzCore (24A446).
+-        if (void *start = dlsym(RTLD_DEFAULT, "CARenderServerStart")) {
++        // The stored option values and the framebuffer branch are addresses of iPadOS 27's QuartzCore (24A446). zeus: only on that
++        // build; on iOS 26 (23F84) they are other data, and the environment above is the whole change.
++        char osBuild[32] = {};
++        size_t osBuildSize = sizeof osBuild - 1;
++        const bool quartz24A446 = sysctlbyname("kern.osversion", osBuild, &osBuildSize, nullptr, 0) == 0 && !strcmp(osBuild, "24A446");
++        gpu->mark(quartz24A446 ? 0x6E0A : 0x6E0B);
++        // zeus, iOS 26 (23F84) QuartzCore: CARenderServerStart 0x184140ff4; IOMFBDisplay::framebuffer_pixel_format 0x183ef7874 + 228 =
++        // 0x183ef7958 is the same `tbnz w8, #0` (word 0x37000608) on CADeviceIsVirtualized's is_virtualized byte (0x1ec5cc3a9) that takes
++        // RGhA on 24A446 (ipsw dyld disass of ~/zeus-research/dsc-23F84, 2026-11-22). With fb-bgra=1 the render server draws 8-bit BGRA,
++        // which the display pipes fetch and scale themselves (dpu-scanout=2, fb-render) instead of a half-float frame converted on the GPU.
++        // patchFramebufferBranch checks the word first (0x6E41: other instruction, nothing written).
++        if (!quartz24A446 && !strcmp(osBuild, "23F84") && !strcmp(getprogname(), "backboardd") && bootArgSet("fb-bgra=1")) {
++            if (void *start23 = dlsym(RTLD_DEFAULT, "CARenderServerStart")) {
++                const uintptr_t slide23 = (uintptr_t)ptrauth_strip(start23, ptrauth_key_function_pointer) - 0x184140ff4;
++                gpu->mark(patchFramebufferBranch(0x183ef7958 + slide23));
++            }
++        }
++        if (void *start = quartz24A446 ? dlsym(RTLD_DEFAULT, "CARenderServerStart") : nullptr) {
+             const uintptr_t slide = (uintptr_t)ptrauth_strip(start, ptrauth_key_function_pointer) - 0x1846dce88;
+             const float one = 1.0f, never = 1e30f;
+             gpu->mark(writeTask(0x1e7021014 + slide, &one, sizeof one) ? 0x6E01 : 0x6EF1);
+@@ -610,6 +629,7 @@ static id deviceForPort(unsigned port) {
+             }
+             // What the device writes in the system cache's directory is readable by everyone; in any other, by this user alone.
+             native_bridge_metal_system_cache(nullptr, nullptr, 0, i == 6);
++            zeusSystemLayer();
+             @try {
+                 device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
+             } @catch (NSException *exception) {
+@@ -661,7 +681,7 @@ static id deviceForPort(unsigned port) {
+         // The iPadOS primer uses an 8 MiB stack for large translated functions.
+         pthread_attr_setstacksize(&attributes, 8u << 20);
+         pthread_t primer;
+-        if (!bootArgSet("gpu-prime=0")) pthread_create(&primer, &attributes, [](void *) -> void * {
++        if (!bootArgSet("gpu-prime=0") && !zeusdl::bootArg("zeus-prime=0")) pthread_create(&primer, &attributes, [](void *) -> void * {
+                 pthread_setname_np("native-metal-prime");   // a process sample and the telemetry's TH rows name its CPU time
+                 char list[1024];
+                 prime::run((id<MTLDevice>)device, gCacheDirectory, 90,
+diff --git a/NativeBridgeMetalFrontend.mm b/NativeBridgeMetalFrontend.mm
+index df72c78..836e6bc 100644
+--- a/NativeBridgeMetalFrontend.mm
++++ b/NativeBridgeMetalFrontend.mm
+@@ -3618,12 +3618,20 @@ - (void)finish {
+   NmbCommandBuffer *handle=_handle;_handle=nullptr;
+   nmb_command_buffer_release(handle);
+  }
+- NSArray *completedHandlers;
++ NSArray *completedHandlers,*lateScheduled=nil;
+  @synchronized(self){
+-  // A frontend refusal or a failed submission never scheduled. Unblock its waiter without inventing a scheduled event.
+-  if(!_schedulingDelivered){_schedulingDelivered=YES;[_scheduledHandlers removeAllObjects];dispatch_group_leave(_schedulingHandlers);}
++  // A frontend refusal or a failed submission never scheduled. Its scheduled handlers still run, once, before the completed ones:
++  // callers clear state in them. zeus 2026-11-22: RenderBox (RB::Device::will_submit_command_buffer) keeps the previous command
++  // buffer unretained at +0x410 and clears it from that buffer's scheduled handler; dropping the handler left a dangling pointer
++  // and SpringBoard died in objc_retain / an unrecognised waitUntilScheduled (gpum6/gpum7 crash reports).
++  if(!_schedulingDelivered){_schedulingDelivered=YES;lateScheduled=[_scheduledHandlers copy];[_scheduledHandlers removeAllObjects];}
++  else lateScheduled=nil;
+   completedHandlers=[_completedHandlers copy];[_completedHandlers removeAllObjects];
+  }
++ if(lateScheduled){
++  for(MTLCommandBufferHandler block in lateScheduled)block((id<MTLCommandBuffer>)self);
++  dispatch_group_leave(_schedulingHandlers);
++ }
+  if(!watched.empty()) {
+   // A command buffer refused before its commit never hashed its sources.
+   for(const WatchedSource &source:watched)
+@@ -4608,7 +4616,11 @@ - (NSUInteger)recommendedMaxWorkingSetSize {
+ }
+ - (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d {
+  if(!d)return nil;
+- NmbHeap *handle=nmb_heap_new(gDevice,d.type,d.size,(uint64_t)d.resourceOptions);
++ // Metal's private resource-option bits 21 and 22 (0x600000; cameracaptured's heaps pass 0x600200) are not defined for the runtime, whose
++ // ResourceOptions::from_raw refuses any unknown bit: the heap was refused and cameracaptured restarted in a loop (zeus 2026-11-19). The heap
++ // is made without them; it reports the options it was asked for.
++ const uint64_t heapOptions=(uint64_t)d.resourceOptions&~(uint64_t)0x600000;
++ NmbHeap *handle=nmb_heap_new(gDevice,d.type,d.size,heapOptions);
+  if(!handle){NBLOG(@"native-metal: heap refused: %@",lastError());return nil;}
+  NBHeap *heap=[NBHeap new];heap.handle=handle;heap.options=d.resourceOptions;heap.heapType=d.type;return (id<MTLHeap>)heap;
+ }
+diff --git a/ZeusClientQuirks.h b/ZeusClientQuirks.h
+new file mode 100644
+index 0000000..741d3aa
+--- /dev/null
++++ b/ZeusClientQuirks.h
+@@ -0,0 +1,131 @@
++// SPDX-License-Identifier: MIT
++// zeus (Xiaomi 12 Pro, A730, iOS 26.5.2 23F84): client cache directory, shipped system cache, UIKit display-link rate.
++// UniXNU-zeus patches/adrenometal/0005.
++#pragma once
++#include <CoreFoundation/CoreFoundation.h>
++#include <errno.h>
++#include <objc/runtime.h>
++#include <os/log.h>
++#include <pwd.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/sysctl.h>
++#include <unistd.h>
++
++extern "C" int sandbox_check(pid_t pid, const char *operation, int type, ...);
++extern "C" bool native_bridge_metal_system_cache(const char *reader, const uint32_t *owners, unsigned count, bool writer);
++
++namespace zeusdl {
++static bool bootArg(const char *token) {
++    char args[1100] = {};
++    size_t size = sizeof args - 1;
++    if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) != 0) return false;
++    const size_t n = strlen(token);
++    for (const char *at = strstr(args, token); at; at = strstr(at + 1, token))
++        if ((at == args || at[-1] == ' ') && (at[n] == 0 || at[n] == ' ')) return true;
++    return false;
++}
++}  // namespace zeusdl
++
++// A directory this process may keep: made level by level, owned by this user, writable. 0 or the step that failed (x100) + errno.
++static int zeusUsableDirectory(const char *const *levels, unsigned count) {
++    for (unsigned i = 0; i < count; ++i)
++        if (mkdir(levels[i], 0700) != 0 && errno != EEXIST) return 100 * (i + 1) + errno;
++    struct stat st = {};
++    const char *path = levels[count - 1];
++    if (lstat(path, &st) != 0) return 900 + errno;
++    if (!S_ISDIR(st.st_mode) || st.st_uid != getuid()) return 950;
++    if (access(path, W_OK) != 0) return 980 + errno;
++    return 0;
++}
++
++// A persistent cache directory for a client, or "": <Caches>/<bundle id>/com.apple.metalfe/m2v (Metal's own iOS cache directory),
++// then <Caches>/<bundle id>/m2v. <Caches> is $HOME/Library/Caches ($HOME is a containerised app's container).
++static void zeusPersistentClientCache(char *out, size_t size) {
++    out[0] = 0;
++    const char *home = getenv("HOME");
++    if (!home || !home[0]) {
++        if (const passwd *user = getpwuid(getuid()); user && user->pw_dir) home = user->pw_dir;
++    }
++    char name[256] = {};
++    if (CFBundleRef bundle = CFBundleGetMainBundle()) {
++        if (CFStringRef ident = CFBundleGetIdentifier(bundle)) CFStringGetCString(ident, name, sizeof name, kCFStringEncodingUTF8);
++    }
++    if (!name[0]) strlcpy(name, getprogname(), sizeof name);
++    for (char *c = name; *c; ++c) if (*c == '/') *c = '_';
++    int why[2] = {-1, -1};
++    if (home && home[0] && strcmp(home, "/") && strcmp(home, "/var/empty")) {
++        char caches[512], app[512], metalfe[512], a[512], b[512];
++        snprintf(caches, sizeof caches, "%s/Library/Caches", home);
++        snprintf(app, sizeof app, "%s/%s", caches, name);
++        snprintf(metalfe, sizeof metalfe, "%s/com.apple.metalfe", app);
++        snprintf(a, sizeof a, "%s/m2v", metalfe);
++        snprintf(b, sizeof b, "%s/m2v", app);
++        const char *first[] = {caches, app, metalfe, a}, *second[] = {caches, app, b};
++        const bool sandboxed = sandbox_check(getpid(), nullptr, 0) == 1;
++        // SANDBOX_FILTER_PATH (1) | SANDBOX_CHECK_NO_REPORT (0x40000000): nonzero refuses; a refused probe writes no report.
++        for (int k = 0; k < 2 && !out[0]; ++k) {
++            const char *path = k ? b : a;
++            if (sandboxed && sandbox_check(getpid(), "file-write-create", 1 | 0x40000000, path) != 0) {why[k] = 1; continue;}
++            why[k] = k ? zeusUsableDirectory(second, 3) : zeusUsableDirectory(first, 4);
++            if (!why[k] && strlen(path) + 1 <= size) strlcpy(out, path, size);
++        }
++    }
++    os_log(OS_LOG_DEFAULT, "NativeAdrenoMetal zeus: client cache %{public}s (%{public}s; home %{public}s; metalfe %d, app %d)",
++           out[0] ? out : "none", name, home ? home : "-", why[0], why[1]);
++}
++
++// The read-only system cache shipped in the image (the union of a boot's caches for this plug-in build). True when it is the layer.
++static const char kZeusSystemLayer[] = "/System/Library/Extensions/NativeAdrenoMetal.cache";
++static bool zeusSystemLayer() {
++    if (zeusdl::bootArg("zeus-syscache=0")) return false;
++    struct stat st = {};
++    if (lstat(kZeusSystemLayer, &st) != 0 || !S_ISDIR(st.st_mode)) return false;
++    static const uint32_t owners[] = {0};
++    return native_bridge_metal_system_cache(kZeusSystemLayer, owners, 1, false);
++}
++
++// UIKit's in-process animation manager asks its CADisplayLink for 20..120 a second, preferred 30. zeus-dl=0 turns the drop off.
++namespace zeusdl {
++typedef struct {float minimum, maximum, preferred;} Range;
++static id (*made)(id, SEL, id, SEL);
++static void (*fps)(id, SEL, long);
++static void (*range)(id, SEL, Range);
++static char key;
++static unsigned marked, dropped;
++static bool full(id link) {return objc_getAssociatedObject(link, &key) != nil;}
++static id linkWith(id self, SEL sel, id target, SEL action) {
++    id link = made(self, sel, target, action);
++    if (link && target && strstr(object_getClassName(target), "InProcessAnimationManager")) {
++        objc_setAssociatedObject(link, &key, (__bridge id)kCFBooleanTrue, OBJC_ASSOCIATION_ASSIGN);
++        if (marked++ < 2) os_log(OS_LOG_DEFAULT, "NativeAdrenoMetal zeus: display link of %{public}s follows the display", object_getClassName(target));
++    }
++    return link;
++}
++static void setFps(id self, SEL sel, long value) {
++    if (full(self)) {value = 0; ++dropped;}
++    fps(self, sel, value);
++}
++static void setRange(id self, SEL sel, Range value) {
++    const bool animation = value.minimum == 20 && value.maximum == 120 && value.preferred == 30;
++    if (animation || full(self)) {
++        if (dropped++ < 3) os_log(OS_LOG_DEFAULT, "NativeAdrenoMetal zeus: dropped display link rate %.0f..%.0f preferred %.0f (%{public}s)",
++                                  value.minimum, value.maximum, value.preferred, getprogname());
++        value = Range{0, 0, 0};
++    }
++    range(self, sel, value);
++}
++__attribute__((constructor)) static void install() {
++    if (bootArg("zeus-dl=0")) return;
++    Class link = objc_getClass("CADisplayLink");
++    if (!link) return;
++    Method m = class_getClassMethod(link, sel_registerName("displayLinkWithTarget:selector:"));
++    Method f = class_getInstanceMethod(link, sel_registerName("setPreferredFramesPerSecond:"));
++    Method r = class_getInstanceMethod(link, sel_registerName("setPreferredFrameRateRange:"));
++    if (!m || !f || !r) return;
++    made = (id (*)(id, SEL, id, SEL))method_setImplementation(m, (IMP)linkWith);
++    fps = (void (*)(id, SEL, long))method_setImplementation(f, (IMP)setFps);
++    range = (void (*)(id, SEL, Range))method_setImplementation(r, (IMP)setRange);
++}
++}  // namespace zeusdl
+diff --git a/bridge/patches/0065-zeus-read-pages-on-ios.patch b/bridge/patches/0065-zeus-read-pages-on-ios.patch
+new file mode 100644
+index 0000000..8e4bd86
+--- /dev/null
++++ b/bridge/patches/0065-zeus-read-pages-on-ios.patch
+@@ -0,0 +1,14 @@
++diff --git a/crates/metal2vulkan-runtime/src/copied.rs b/crates/metal2vulkan-runtime/src/copied.rs
++--- a/crates/metal2vulkan-runtime/src/copied.rs
+++++ b/crates/metal2vulkan-runtime/src/copied.rs
++@@ -2640,8 +2640,8 @@
++     true
++ }
++ 
++-/// [`read_pages`] on macOS.
++-#[cfg(target_os = "macos")]
+++/// [`read_pages`] on macOS and iOS.
+++#[cfg(any(target_os = "macos", target_os = "ios"))]
++ pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
++     unsafe extern "C" {
++         /// `<mach/mach_init.h>`: the port of this process's task.

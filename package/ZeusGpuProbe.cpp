@@ -104,6 +104,14 @@ volatile uint32_t zeus_gpu_dcvs[18];
 // (c265000 #1..#4), [3..5] their peaks. 0x7fffffff: not read.
 volatile int32_t zeus_thermal[6] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
 }
+// #top: CPU time per process over the last window (ms, the busiest ten), kernel_task included (its idle threads too).
+extern "C" {
+char zeus_top_row[280];
+struct ZeusTaskInfo {uint64_t virt, resident, user, system, threadsUser, threadsSystem; int32_t words[12];};
+void fill_taskprocinfo(task_t task, struct ZeusTaskInfo *info);
+void *proc_task(void *p);
+int proc_pid(void *p);
+}
 // patches/armsmmu4k/0002: the SMR mask the kit gives its owned streams.
 extern "C" volatile uint16_t armsmmu4k_smr_mask __attribute__((weak));
 
@@ -1313,6 +1321,57 @@ void thermalRead() {
     if (now[i] != 0x7fffffff && (zeus_thermal[3 + i] == 0x7fffffff || now[i] > zeus_thermal[3 + i])) zeus_thermal[3 + i] = now[i];
   }
 }
+struct TopProc {int pid; uint64_t last, delta; char name[18];};
+struct TopScan {TopProc *p; unsigned n, max;};
+void topOne(TopScan *s, int pid, void *task, const char *name) {
+  if (!task) return;
+  ZeusTaskInfo info{};
+  fill_taskprocinfo(static_cast<task_t>(task), &info);
+  const uint64_t total = info.user + info.system;
+  for (unsigned i = 0; i < s->n; ++i) if (s->p[i].pid == pid) {
+    s->p[i].delta = total > s->p[i].last ? total - s->p[i].last : 0; s->p[i].last = total;
+    return;
+  }
+  if (s->n == s->max) return;
+  TopProc &t = s->p[s->n++];
+  t.pid = pid; t.last = total; t.delta = 0;
+  strlcpy(t.name, name ? name : "?", sizeof t.name);
+}
+int topScan(void *proc, void *arg) {
+  topOne(static_cast<TopScan *>(arg), proc_pid(proc), proc_task(proc), proc_name_address(proc));
+  return 0;   // PROC_RETURNED
+}
+void topThread(void *, wait_result_t) {
+  thread_set_thread_name(current_thread(), "zeus-top");
+  TopScan s{static_cast<TopProc *>(IOMallocZero(sizeof(TopProc) * 512)), 0, 512};
+  if (!s.p) return;
+  uint64_t last = mach_absolute_time();
+  for (;;) {
+    IOSleep(6000);
+    for (unsigned i = 0; i < s.n; ++i) s.p[i].delta = 0;
+    topOne(&s, 0, kernel_task, "kernel");
+    proc_iterate(1 /* PROC_ALLPROCLIST */, topScan, &s, nullptr, nullptr);
+    const uint64_t now = mach_absolute_time();
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(now - last, &ns);
+    last = now;
+    char row[sizeof zeus_top_row];
+    int n = snprintf(row, sizeof row, "#top %llums", static_cast<unsigned long long>(ns / 1000000));
+    uint64_t rest = 0;
+    for (unsigned k = 0; k < 10; ++k) {
+      TopProc *best = nullptr;
+      for (unsigned i = 0; i < s.n; ++i) if (s.p[i].delta && (!best || s.p[i].delta > best->delta)) best = &s.p[i];
+      if (!best || n < 0 || n >= int(sizeof row) - 32) break;
+      absolutetime_to_nanoseconds(best->delta, &ns);
+      best->delta = 0;
+      n += snprintf(row + n, sizeof row - n, " %s:%llu", best->name, static_cast<unsigned long long>(ns / 1000000));
+    }
+    for (unsigned i = 0; i < s.n; ++i) {absolutetime_to_nanoseconds(s.p[i].delta, &ns); rest += ns;}
+    if (n > 0 && n < int(sizeof row)) snprintf(row + n, sizeof row - n, " rest:%llu", static_cast<unsigned long long>(rest / 1000000));
+    strlcpy(zeus_top_row, row, sizeof zeus_top_row);
+    if (s.n == s.max) s.n = 0;   // pids of ended processes: start over
+  }
+}
 void dcvsThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-gpu-dcvs");
   gTsens[0] = mapIo(0x0c263000, 0x1000);
@@ -1387,6 +1446,7 @@ void dcvsThread(void *, wait_result_t) {
 void startDcvs() {
   thread_t thread;
   if (kernel_thread_start(dcvsThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+  if (kernel_thread_start(topThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
 unsigned gMode, gDelayS = 90;

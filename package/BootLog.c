@@ -41,6 +41,7 @@ extern int native_ufs_log_sync(void) __attribute__((weak_import));
 // The display driver's last refused swap (LegacyDisplayProbe.cpp): counts, reason, layer state/options, request size, surface slots and the surface.
 extern volatile uint32_t zeus_gpu_dcvs[18] __attribute__((weak_import));
 extern volatile int32_t zeus_thermal[6] __attribute__((weak_import));
+extern char zeus_top_row[280] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_rejected_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_rej_reason __attribute__((weak_import));
@@ -1385,11 +1386,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       at = put(out, at, cap, row, sizeof row);
     }
   }
-  // [zeus gpu]: the clock governor and die temperatures (ZeusGpuProbe.cpp), then the display swaps accepted.
+  // '#' rows pass every log group filter; a new [name] row is dropped by it (gpum34 and gpum35 had no [zeus gpu] row for that).
+  if (&zeus_top_row && zeus_top_row[0]) at = put(out, at, cap, zeus_top_row, sizeof zeus_top_row);
+  // #zgpu: the clock governor and die temperatures (ZeusGpuProbe.cpp), then the display swaps accepted.
   if (&zeus_gpu_dcvs && &zeus_thermal) {
     char row[300];
     const volatile uint32_t *g = zeus_gpu_dcvs;
-    snprintf(row, sizeof row, "[zeus gpu] dcvs %u lvl %u chg %u fail %u busy %u win %u at %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u | dC gpu %d big %d little %d peak %d/%d/%d | swaps %u",
+    snprintf(row, sizeof row, "#zgpu dcvs %u lvl %u chg %u fail %u busy %u win %u at %u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u/%u | dC gpu %d big %d little %d peak %d/%d/%d | swaps %u",
              g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7], g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15], g[16], g[17],
              zeus_thermal[0], zeus_thermal[1], zeus_thermal[2], zeus_thermal[3], zeus_thermal[4], zeus_thermal[5],
              &native_legacy_swap_accepted_count ? native_legacy_swap_accepted_count : 0);
@@ -1648,7 +1651,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_gpu_perf_vote ? native_gpu_perf_vote[1] : 0);
     at = put(out, at, cap, row, sizeof row);
     if (&native_cpufreq_gov && (native_cpufreq_gov[1] || native_cpufreq_gov[4] || native_cpufreq_gov[7])) {
-      snprintf(row, sizeof row, "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw",
+      snprintf(row, sizeof row, "#cpu gov d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw",
                native_cpufreq_gov[0], native_cpufreq_gov[1], native_cpufreq_gov[2], native_cpufreq_gov[3], native_cpufreq_gov[4],
                native_cpufreq_gov[5], native_cpufreq_gov[6], native_cpufreq_gov[7], native_cpufreq_gov[8],
                &native_cpufreq_boosts ? native_cpufreq_boosts : 0, &native_cpufreq_frame ? native_cpufreq_frame[0] : 0,
@@ -1656,7 +1659,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       at = put(out, at, cap, row, sizeof row);
       if (&native_cpufreq_throttle) {
         const volatile uint32_t *th = native_cpufreq_throttle;
-        snprintf(row, sizeof row, "[cpu throttle] busy/throttled windows, lowest MHz: d0 %u/%u %u | d1 %u/%u %u | d2 %u/%u %u",
+        snprintf(row, sizeof row, "#cpu throttle busy/throttled windows, lowest MHz: d0 %u/%u %u | d1 %u/%u %u | d2 %u/%u %u",
                  th[0], th[1], th[2], th[3], th[4], th[5], th[6], th[7], th[8]);
         at = put(out, at, cap, row, sizeof row);
       }

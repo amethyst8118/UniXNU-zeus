@@ -111,6 +111,19 @@ struct ZeusTaskInfo {uint64_t virt, resident, user, system, threadsUser, threads
 void fill_taskprocinfo(task_t task, struct ZeusTaskInfo *info);
 struct task *proc_task(struct proc *p);
 }
+// #ustack (zeus-ustack=<pid>, off by default): the user stack of one process's main thread every 10 s, for a process that hangs
+// without crashing (gpum42: SpringBoard's main thread silent from 81.7 s with the R2507 plug-in). Only that one process is touched,
+// unlike #top's walk over every task.
+extern "C" {
+char zeus_ustack_row[440];
+struct proc *proc_find(int pid);
+int proc_rele(struct proc *p);
+void task_act_iterate_wth_args(task_t task, void (*func)(thread_t, void *), void *arg);
+void *find_user_regs(thread_t thread);
+vm_map_t get_task_map_reference(task_t task);
+kern_return_t vm_map_read_user(vm_map_t map, vm_map_address_t src, void *dst, vm_size_t size);
+void vm_map_deallocate(vm_map_t map);
+}
 // patches/armsmmu4k/0002: the SMR mask the kit gives its owned streams.
 extern "C" volatile uint16_t armsmmu4k_smr_mask __attribute__((weak));
 
@@ -1442,6 +1455,69 @@ void dcvsThread(void *, wait_result_t) {
     }
   }
 }
+// The saved user state of a thread (struct arm_saved_state: an 8-byte header, then arm_saved_state64 x[29], fp, lr, sp, pc). Read in
+// task_act_iterate_wth_args' callback, under the task lock: only plain loads, no faults. The first thread iterated is the main thread.
+struct UstackRegs {unsigned threads; uint64_t x0, x1, x16, fp, lr, sp, pc;};
+void ustackOne(thread_t thread, void *arg) {
+  UstackRegs *r = static_cast<UstackRegs *>(arg);
+  if (r->threads++) return;
+  const uint8_t *s = static_cast<const uint8_t *>(find_user_regs(thread));
+  if (!s) return;
+  const uint64_t *x = reinterpret_cast<const uint64_t *>(s + 8);
+  r->x0 = x[0]; r->x1 = x[1]; r->x16 = x[16]; r->fp = x[29]; r->lr = x[30]; r->sp = x[31]; r->pc = x[32];
+}
+void ustackThread(void *arg, wait_result_t) {
+  thread_set_thread_name(current_thread(), "zeus-ustack");
+  const int pid = static_cast<int>(reinterpret_cast<uintptr_t>(arg));
+  const uint64_t kUser = 0x0000000fffffffffULL;   // user addresses below 64 GiB; strips PAC bits
+  unsigned same = 0;
+  uint64_t lastPc = 0;
+  for (;;) {
+    IOSleep(10000);
+    struct proc *p = proc_find(pid);
+    if (!p) continue;
+    task_t task = reinterpret_cast<task_t>(proc_task(p));
+    UstackRegs r{};
+    char name[20] = "?";
+    if (const char *n = proc_name_address(p)) strlcpy(name, n, sizeof name);
+    uint64_t frames[22];
+    unsigned nf = 0;
+    if (task) {
+      task_act_iterate_wth_args(task, ustackOne, &r);
+      vm_map_t map = get_task_map_reference(task);
+      uint64_t fp = r.fp & kUser;
+      while (map && fp && !(fp & 7) && nf < 22) {
+        uint64_t pair[2] = {};
+        if (vm_map_read_user(map, fp, pair, sizeof pair) != KERN_SUCCESS) break;
+        frames[nf++] = pair[1] & kUser;
+        const uint64_t next = pair[0] & kUser;
+        if (next <= fp) break;
+        fp = next;
+      }
+      if (map) vm_map_deallocate(map);
+    }
+    proc_rele(p);
+    same = (r.pc & kUser) == lastPc ? same + 1 : 0;
+    lastPc = r.pc & kUser;
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    char row[sizeof zeus_ustack_row];
+    int n = snprintf(row, sizeof row, "#ustack %d %s up %llus thr %u same %u x16 %lld x0 %llx x1 %llx pc %llx lr %llx sp %llx |", pid, name,
+                     static_cast<unsigned long long>(ns / 1000000000ULL), r.threads, same, static_cast<long long>(r.x16),
+                     static_cast<unsigned long long>(r.x0), static_cast<unsigned long long>(r.x1), static_cast<unsigned long long>(r.pc & kUser),
+                     static_cast<unsigned long long>(r.lr & kUser), static_cast<unsigned long long>(r.sp & kUser));
+    for (unsigned i = 0; i < nf && n > 0 && n < int(sizeof row) - 12; ++i)
+      n += snprintf(row + n, sizeof row - n, " %llx", static_cast<unsigned long long>(frames[i]));
+    strlcpy(zeus_ustack_row, row, sizeof zeus_ustack_row);
+  }
+}
+void startUstack() {
+  unsigned pid = 0;
+  if (!PE_parse_boot_argn("zeus-ustack", &pid, sizeof(pid)) || !pid) return;
+  thread_t thread;
+  if (kernel_thread_start(ustackThread, reinterpret_cast<void *>(static_cast<uintptr_t>(pid)), &thread) == KERN_SUCCESS)
+    thread_deallocate(thread);
+}
 void startDcvs() {
   thread_t thread;
   if (kernel_thread_start(dcvsThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
@@ -1456,6 +1532,7 @@ void startDcvs() {
 unsigned gMode, gDelayS = 90;
 void probeThread(void *, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-gpu-probe");
+  startUstack();   // zeus-ustack=<pid> only
   IOSleep(gDelayS * 1000);
   run(gMode);
   if (gMetalStage == 5) startDcvs();   // gpu-dcvs=1 governs; without it the thread only reads the temperatures

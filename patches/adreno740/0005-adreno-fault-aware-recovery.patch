@@ -1,0 +1,178 @@
+zeus: the recovery half of upstream Adreno740 1c9029b (0f150e6, "Integrate qualified Adreno740 runtime changes", UniXNU 8542980),
+on 54b41b8 + patches/adreno740 0001-0004. recover() takes the SMMU fault status: a faulted job is retired even when a ring
+switch stranded work, the replay starts after the completed prefix, the recovery log records the fault bit, and GpuTraceRecovery (70)
+is traced. Left out on purpose: 1c9029b's NativeAdrenoVm change, which drops importedUntouched() (the skip of per-submission cache
+maintenance for GPU-written imports, "about 60 ms per frame"). hangCheck keeps 0004's faulted argument.
+
+diff --git a/NativeAdrenoPublish.cpp b/NativeAdrenoPublish.cpp
+index 03812ca..fd1c3fa 100644
+--- a/NativeAdrenoPublish.cpp
++++ b/NativeAdrenoPublish.cpp
+@@ -162,7 +162,7 @@ extern "C" {volatile uint32_t native_adreno_cp_aperture[4];
+ /* The CP switch check: the bank's image (NativeAdrenoGpuContext::observeContext) before the switch [0..7] and after it [8..15], and the
+  * kit status of each [16], [17]; a fault the switch left latched: FAR lo, hi, FSYNR0 [18..20] and the status after clearing it [21]. */
+ volatile uint32_t native_adreno_cp_image[22];
+-/* The newest 8 GPU restarts: [0] sequence, [1..2] time (us), [3] the fence it hung on, [4] status, [5] jobs replayed, [6] stranded << 0 | guilty << 1,
++/* The newest 8 GPU restarts: [0] sequence, [1..2] time (us), [3] the fence it hung on, [4] status, [5] jobs replayed, [6] stranded << 0 | guilty << 1 | SMMU fault << 2,
+  * [7] why the second ring was given up (0 not). */
+ volatile uint32_t native_adreno_recover_log[8][12];volatile uint32_t native_adreno_recover_log_count;
+ /* checkCpSwitch's step results: createVm, probeBuffer, submit, waitAll, readTtbr0 (each 0 when it passed, ffffffff when not reached). */
+@@ -290,13 +290,14 @@ static void nativeAdrenoHangcheck(void *,wait_result_t)
+             native_adreno_recovery[0]=native_adreno_recovery[0]+1;
+             if(faulted)native_adreno_fault_fast[1]=native_adreno_fault_fast[1]+1;
+             if(g.restart) {
+-                uint32_t fault[4]={};
++                uint32_t fault[4]={};uint64_t fault_table=0;
++                if(g.context)(void)g.context->readTtbr0(&fault_table);
+                 if(g.context && !g.context->endFault(fault) && fault[0]) {
+                     native_adreno_recovery_fault[0]=native_adreno_recovery_fault[0]+1;
+                     for(unsigned i=0;i<4;++i)native_adreno_recovery_fault[1+i]=fault[i];
+                 }
+                 NativeAdrenoRecovery result{};
+-                const IOReturn status=g.submit->recover(g.restart,g.restart_cookie,&g.clock,&result);
++                const IOReturn status=g.submit->recover(g.restart,g.restart_cookie,&g.clock,&result,fault[0]);
+                 native_adreno_recovery[3]=result.fence;native_adreno_recovery[4]=uint32_t(status?status:result.status);
+                 native_adreno_recovery[5]=native_adreno_recovery[5]+result.replayed;
+                 if(result.guilty)native_adreno_recovery[6]=native_adreno_recovery[6]+1;
+@@ -308,9 +309,12 @@ static void nativeAdrenoHangcheck(void *,wait_result_t)
+                     const uint32_t n=native_adreno_recover_log_count;volatile uint32_t *row=native_adreno_recover_log[n&7];
+                     const uint64_t now=g.clock.now_us?g.clock.now_us(g.clock.cookie):0;
+                     row[0]=n+1;row[1]=uint32_t(now);row[2]=uint32_t(now>>32);row[3]=result.fence;row[4]=uint32_t(status?status:result.status);
+-                    row[5]=result.replayed;row[6]=(g.submit->lastRecoveryStranded()?1u:0u)|(result.guilty?2u:0u);row[7]=g.submit->deadReason();
++                    row[5]=result.replayed;row[6]=(g.submit->lastRecoveryStranded()?1u:0u)|(result.guilty?2u:0u)|(result.fault_status?4u:0u);row[7]=g.submit->deadReason();
+                     for(unsigned i=0;i<4;++i)row[8+i]=g.submit->recoveryInfo(i);
+                     native_adreno_recover_log_count=n+1;
++                    gpuTraceEvent(GpuTraceRecovery,0,result.fence,result.completed,result.replayed,row[6],row[7],
++                        row[8],row[11],uint32_t(status?status:result.status),result.fault_status,
++                        uint64_t(fault[2])<<32|fault[1],fault[3],fault_table);
+                 }
+                 if(status)g.status.noteFault();
+                 if(!status)g.status.noteSuspend();
+diff --git a/NativeAdrenoSubmit.cpp b/NativeAdrenoSubmit.cpp
+index 56748b5..536dd98 100644
+--- a/NativeAdrenoSubmit.cpp
++++ b/NativeAdrenoSubmit.cpp
+@@ -385,7 +385,7 @@ void NativeAdrenoSubmit::driveSwitch(const NativeAdrenoRingClock *clock)
+     if(preempt_.inFlight()) {
+         if(!completeSwitch()) {
+             /* The CP never finished a switch: no more are tried (the restart in recover() brings the CP back). */
+-            if(preempt_.timedOut(PreemptSwitchTimeoutUs)) {
++            if(!preempt_dead_ && preempt_.timedOut(PreemptSwitchTimeoutUs)) {
+                 uint32_t progress[6]={};
+                 (void)ring(0)->progressState(progress);
+                 {
+@@ -1158,7 +1158,7 @@ IOReturn NativeAdrenoSubmit::hangCheck(bool *hung,bool faulted)
+     return kIOReturnSuccess;
+ }
+ IOReturn NativeAdrenoSubmit::recover(NativeAdrenoRestart restart,void *cookie,const NativeAdrenoRingClock *clock,
+-    NativeAdrenoRecovery *out)
++    NativeAdrenoRecovery *out,uint32_t fault_status)
+ {
+     if(!out)return kIOReturnBadArgument;*out={};
+     if(!attached_)return kIOReturnNotReady;
+@@ -1167,7 +1167,8 @@ IOReturn NativeAdrenoSubmit::recover(NativeAdrenoRestart restart,void *cookie,co
+     const uint32_t last0=ring(0)->lastSubmitted(),last1=preemption()?ring(1)->lastSubmitted():0;
+     const uint32_t last=(int32_t)(last1-last0)>0?last1:last0;
+     uint32_t fence=0;
+-    const bool stranded=stranded_;
++    const bool stranded=stranded_ && !fault_status;
++    out->fault_status=fault_status;
+     stranded_=false;last_stranded_=stranded;
+     if(stranded) {
+         /* No job is to blame: the second ring's work never got a CP. What each ring finished retires by that ring's own fence, and the
+@@ -1219,7 +1220,9 @@ IOReturn NativeAdrenoSubmit::recover(NativeAdrenoRestart restart,void *cookie,co
+     /* A hang inside a second-ring job is blamed on the second ring: it is given up (reason 4), the replay and everything after run on the first. */
+     if(guilty && guilty->ring==1)markPreemptDead(4);
+     recovery_info_[0]=guilty?uint32_t(guilty->ring):9;recovery_info_[1]=last0;recovery_info_[2]=last1;recovery_info_[3]=preemption()?preempt_.loaded():0;
+-    IOReturn status=restart(cookie,ring(0),hung);
++    const uint32_t completed=stranded?fence:hung;
++    out->completed=completed;
++    IOReturn status=restart(cookie,ring(0),completed);
+     out->status=status;
+     if(status) {native_adreno_recover_trace[0]=2;native_adreno_recover_trace[1]=uint32_t(status);return poison();}
+     poisoned_=false;hang_fence_=hung;progress_retries_=0;
+@@ -1237,7 +1240,7 @@ IOReturn NativeAdrenoSubmit::recover(NativeAdrenoRestart restart,void *cookie,co
+     if(preemption()) {
+         preempt_.restart(0);low_service_us_=low_slice_until_=0;aging_grant_=false;
+         ring(0)->setCurrent(true);
+-        (void)ring(1)->restartSecondary(hung);
++        (void)ring(1)->restartSecondary(completed);
+         ring(1)->setCurrent(false);
+         for(unsigned i=0;i<ring_count_;++i) {
+             ring(i)->tableInstalled(vm_->ttbr0());
+@@ -1246,7 +1249,7 @@ IOReturn NativeAdrenoSubmit::recover(NativeAdrenoRestart restart,void *cookie,co
+     }
+     uint32_t nop=0;
+     if(AdrenoPM4Type7(0x10,0,&nop)!=AdrenoPM4Success) {native_adreno_recover_trace[0]=4;return poison();}   /* CP_NOP */
+-    for(uint32_t next=hung+1;next && next<=last;++next) {
++    for(uint32_t next=completed+1;next && next<=last;++next) {
+         Job *job=find(next);
+         NativeAdrenoVm *vm=job && job->vm?job->vm:vm_;
+         const bool run=job && !vm->unusable() && job->word_count;
+diff --git a/NativeAdrenoSubmit.h b/NativeAdrenoSubmit.h
+index c9caa0b..ce0df93 100644
+--- a/NativeAdrenoSubmit.h
++++ b/NativeAdrenoSubmit.h
+@@ -43,6 +43,8 @@ extern "C" volatile uint32_t native_adreno_stall_kick[26];
+ typedef IOReturn (*NativeAdrenoRestart)(void *cookie,NativeAdrenoRing *ring,uint32_t completed);
+ struct NativeAdrenoRecovery {
+     uint32_t fence;            /* the fence the GPU hung on */
++    uint32_t completed;        /* completed prefix installed before replay */
++    uint32_t fault_status;     /* SMMU fault status captured before reset */
+     uint32_t replayed;         /* submissions given to the ring again after the restart */
+     NativeAdrenoVm *guilty;    /* the VM of the hung submission, null when no job held that fence */
+     IOReturn status;
+@@ -266,10 +268,10 @@ public:
+     /* faulted (zeus, patches/adreno740/0004): the context bank holds a translation fault, so a stopped fence is a hang at the second
+      * look without the progress retries (a faulted GPU does not finish the job; the retries only stretched each fault to ~2 s). */
+     IOReturn hangCheck(bool *hung,bool faulted=false);
+-    /* msm's recover_worker: the job on the hung fence is the guilty one (its VM is marked, NativeAdrenoVm::noteHang), the ring fence
+-     * moves past it, restart resets the GPU, the guilty job is retired, then every later job is submitted again with its own fence
+-     * (a job of an unusable VM without its buffers). Callers serialize this with every other method. A failed restart poisons. */
+-    IOReturn recover(NativeAdrenoRestart restart,void *cookie,const NativeAdrenoRingClock *,NativeAdrenoRecovery *);
++    /* A fault or hang retires the guilty fence and replays later jobs. A scheduling rescue replays every unfinished job from
++     * oldest onward. fault_status selects fault recovery even when a ring switch stranded pending work. The guilty VM receives
++     * noteHang; an unusable VM gets empty commands on replay. Callers serialize this with every other method. */
++    IOReturn recover(NativeAdrenoRestart restart,void *cookie,const NativeAdrenoRingClock *,NativeAdrenoRecovery *,uint32_t fault_status=0);
+     bool poisoned() const {return poisoned_;}
+     size_t outstanding() const;
+     NativeAdrenoSubmitStats stats() const {return stats_;}
+diff --git a/NativeGpuLatency.h b/NativeGpuLatency.h
+index e736a52..27fd8b4 100644
+--- a/NativeGpuLatency.h
++++ b/NativeGpuLatency.h
+@@ -15,7 +15,7 @@ static inline bool native_gpu_latency_stage(uint32_t stage) {
+  * 44; Turnip sends them only with SHENG_GPU_TRACE). */
+ static inline bool native_gpu_latency_event(uint32_t event,const uint64_t *,uint32_t) {
+     switch(event) {
+-    case 1:case 3:case 10:case 11:case 20:case 21:case 22:case 23:case 36:case 37:case 44:case 63:case 65:return true;
++    case 1:case 3:case 10:case 11:case 20:case 21:case 22:case 23:case 36:case 37:case 44:case 63:case 65:case 70:return true;
+     default:return false;
+     }
+ }
+diff --git a/NativeGpuTrace.h b/NativeGpuTrace.h
+index b940b56..4c967d6 100644
+--- a/NativeGpuTrace.h
++++ b/NativeGpuTrace.h
+@@ -13,7 +13,7 @@ enum {
+     GpuTraceSubmit=10, GpuTraceRetire=11,
+     GpuTraceDisplay=20, GpuTraceDisplaySurface=21, GpuTraceDisplayFence=22,
+     GpuTraceDisplayLatch=23, GpuTraceTurnipPass=36, GpuTraceTurnipGmemSide=37, GpuTraceTurnipAttachment=44,
+-    GpuTraceThread=63, GpuTraceProblem=65
++    GpuTraceThread=63, GpuTraceProblem=65, GpuTraceRecovery=70
+ };
+ struct NativeGpuTraceRecord {
+     uint64_t sequence,us;
+diff --git a/NativeGpuTrace.inc b/NativeGpuTrace.inc
+index bd8bb75..d97e2bd 100644
+--- a/NativeGpuTrace.inc
++++ b/NativeGpuTrace.inc
+@@ -32,7 +32,7 @@ extern "C" void native_gpu_trace_record(uint32_t event,uint32_t pid,const uint64
+     if(event==22 && count>=9 && !gpuLatencyWaits.keep(record.us,pid,record.value[0],(uint32_t)record.value[1],record.value[2],record.value[9]))return;
+     record.sequence=gpuTrace.push(record);
+     if(event==GpuTraceThread && count>=2)gpuThreadTargets.record(pid,(uint32_t)record.value[1],record.value[0]);
+-    const bool meta=event<=3 || event==GpuTraceThread || event==GpuTraceProblem;
++    const bool meta=event<=3 || event==GpuTraceThread || event==GpuTraceProblem || event==GpuTraceRecovery;
+     uint32_t free=0;
+     if(meta && gpuMetadata && __atomic_compare_exchange_n(&gpuMetadataBusy,&free,1,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) {
+         unsigned pick=NativeGpuTraceMetadata;

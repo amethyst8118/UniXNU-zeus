@@ -112,7 +112,7 @@ struct ZeusTaskInfo {uint64_t virt, resident, user, system, threadsUser, threads
 void fill_taskprocinfo(task_t task, struct ZeusTaskInfo *info);
 struct task *proc_task(struct proc *p);
 }
-// #ustack (zeus-ustack=<pid>, off by default): the user stack of one process's main thread every 10 s, for a process that hangs
+// #ustack (zeus-ustack=<pid>, off by default): the user stacks of one process every 2 s (zeus-ustack-ms), running threads first, for a process that hangs
 // without crashing (gpum42: SpringBoard's main thread silent from 81.7 s with the R2507 plug-in). Only that one process is touched,
 // unlike #top's walk over every task.
 extern "C" {
@@ -1480,15 +1480,31 @@ constexpr unsigned kUstackThreads = 16, kUstackFrames = 12;
 // exception (gpum52: securityd's threads stopped for minutes on objc_msgSend+8, objc_alloc+4 … with x16 garbage: a page fault that
 // never completes).
 struct UstackThread {uint64_t x16, fp, lr, sp, pc, far, esr;};
-struct UstackRegs {unsigned threads; UstackThread t[kUstackThreads];};
+// Up to kUstackCapture threads are read; the 16 shown are the main thread, then the ones that last entered the kernel by an exception
+// or interrupt (running or preempted: where the CPU goes), then the rest in order. gpum63: backboardd has 31-35 threads and its render
+// threads come after the first 16, so 53 of 56 samples showed only threads blocked in psynch_cvwait / mach_msg.
+constexpr unsigned kUstackCapture = 96;
+struct UstackRegs {unsigned threads; UstackThread all[kUstackCapture]; UstackThread t[kUstackThreads]; unsigned idx[kUstackThreads];};
+bool ustackInSyscall(const UstackThread &u) {return static_cast<long long>(u.x16) > -10000 && static_cast<long long>(u.x16) < 10000;}
 void ustackOne(thread_t thread, void *arg) {
   UstackRegs *r = static_cast<UstackRegs *>(arg);
   const unsigned i = r->threads++;
-  if (i >= kUstackThreads) return;
+  if (i >= kUstackCapture) return;
   const uint8_t *s = static_cast<const uint8_t *>(find_user_regs(thread));
-  if (!s) return;
+  if (!s) {r->all[i] = {0, 0, 0, 0, 0, 0, 0}; return;}
   const uint64_t *x = reinterpret_cast<const uint64_t *>(s + 8);
-  r->t[i] = {x[16], x[29], x[30], x[31], x[32], x[34], x[35]};
+  r->all[i] = {x[16], x[29], x[30], x[31], x[32], x[34], x[35]};
+}
+// Fills t[]/idx[] from all[]; returns how many are shown.
+unsigned ustackPick(UstackRegs &r) {
+  const unsigned n = r.threads < kUstackCapture ? r.threads : kUstackCapture;
+  unsigned shown = 0;
+  bool used[kUstackCapture] = {};
+  auto take = [&](unsigned i) {if (shown < kUstackThreads && !used[i]) {used[i] = true; r.idx[shown] = i; r.t[shown++] = r.all[i];}};
+  if (n) take(0);
+  for (unsigned i = 1; i < n; ++i) if (r.all[i].pc && !ustackInSyscall(r.all[i])) take(i);
+  for (unsigned i = 1; i < n; ++i) take(i);
+  return shown;
 }
 struct UstackFind {const char *name; int pid;};
 int ustackFindOne(void *p, void *arg) {
@@ -1506,8 +1522,12 @@ void ustackThread(void *arg, wait_result_t) {
   unsigned same = 0;
   uint64_t lastPcs = 0;
   static UstackRegs r;
+  // zeus-ustack-ms: the sampling interval (default 2000 ms; 10000 was enough for hangs, too coarse for where CPU time goes).
+  unsigned interval = 2000;
+  PE_parse_boot_argn("zeus-ustack-ms", &interval, sizeof interval);
+  if (interval < 500) interval = 500;
   for (;;) {
-    IOSleep(10000);
+    IOSleep(interval);
     struct proc *p = target->pid ? proc_find(target->pid) : nullptr;
     if (p && target->byName) {
       const char *n = proc_name_address(p);
@@ -1526,10 +1546,12 @@ void ustackThread(void *arg, wait_result_t) {
     memset(&r, 0, sizeof r);
     uint64_t frames[kUstackThreads][kUstackFrames] = {};
     unsigned nf[kUstackThreads] = {};
+    unsigned picked = 0;
     if (task) {
       task_act_iterate_wth_args(task, ustackOne, &r);
+      picked = ustackPick(r);
       vm_map_t map = get_task_map_reference(task);
-      for (unsigned t = 0; map && t < r.threads && t < kUstackThreads; ++t) {
+      for (unsigned t = 0; map && t < picked; ++t) {
         uint64_t fp = r.t[t].fp & kUser;
         while (fp && !(fp & 7) && nf[t] < kUstackFrames) {
           uint64_t pair[2] = {};
@@ -1544,7 +1566,7 @@ void ustackThread(void *arg, wait_result_t) {
       // protection, user_tag, pages_resident, pages_shared_now_private, pages_swapped_out, pages_dirtied, ref_count, shadow_depth,
       // external_pager, share_mode, pages_reusable).
       uint64_t pages[2] = {}; unsigned np = 0;
-      for (unsigned t = 0; t < r.threads && t < kUstackThreads && np < 2; ++t) {
+      for (unsigned t = 0; t < picked && np < 2; ++t) {
         const long long x16 = static_cast<long long>(r.t[t].x16);
         if (x16 > -10000 && x16 < 10000) continue;
         const uint64_t page = (r.t[t].far & kUser) & ~0x3fffULL;
@@ -1568,12 +1590,12 @@ void ustackThread(void *arg, wait_result_t) {
     }
     proc_rele(p);
     uint64_t pcs = 0;
-    for (unsigned t = 0; t < r.threads && t < kUstackThreads; ++t) pcs = pcs * 31 + (r.t[t].pc & kUser);
+    for (unsigned t = 0; t < picked; ++t) pcs = pcs * 31 + (r.t[t].pc & kUser);
     same = pcs == lastPcs ? same + 1 : 0;
     lastPcs = pcs;
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    const unsigned shown = r.threads < kUstackThreads ? r.threads : kUstackThreads;
+    const unsigned shown = picked;
     for (unsigned t = 0; t < kUstackThreads; ++t) {
       char row[sizeof zeus_ustack_rows[0]];
       row[0] = 0;
@@ -1584,7 +1606,7 @@ void ustackThread(void *arg, wait_result_t) {
         char what[64];
         if (syscall) snprintf(what, sizeof what, "x16 %lld", static_cast<long long>(u.x16));
         else snprintf(what, sizeof what, "far %llx esr %llx", static_cast<unsigned long long>(u.far), static_cast<unsigned long long>(u.esr));
-        int n = t ? snprintf(row, sizeof row, "#ust%u %s pc %llx lr %llx |", t, what,
+        int n = t ? snprintf(row, sizeof row, "#ust%u %s pc %llx lr %llx |", r.idx[t], what,
                              static_cast<unsigned long long>(u.pc & kUser), static_cast<unsigned long long>(u.lr & kUser))
                   : snprintf(row, sizeof row, "#ustack %d %s up %llus thr %u same %u | #ust0 %s pc %llx lr %llx |", target->pid, name,
                              static_cast<unsigned long long>(ns / 1000000000ULL), r.threads, same, what,

@@ -109,8 +109,7 @@ extern "C" {
 char zeus_top_row[280];
 struct ZeusTaskInfo {uint64_t virt, resident, user, system, threadsUser, threadsSystem; int32_t words[12];};
 void fill_taskprocinfo(task_t task, struct ZeusTaskInfo *info);
-void *proc_task(void *p);
-int proc_pid(void *p);
+struct task *proc_task(struct proc *p);
 }
 // patches/armsmmu4k/0002: the SMR mask the kit gives its owned streams.
 extern "C" volatile uint16_t armsmmu4k_smr_mask __attribute__((weak));
@@ -1338,7 +1337,7 @@ void topOne(TopScan *s, int pid, void *task, const char *name) {
   strlcpy(t.name, name ? name : "?", sizeof t.name);
 }
 int topScan(void *proc, void *arg) {
-  topOne(static_cast<TopScan *>(arg), proc_pid(proc), proc_task(proc), proc_name_address(proc));
+  topOne(static_cast<TopScan *>(arg), proc_pid(static_cast<struct proc *>(proc)), proc_task(static_cast<struct proc *>(proc)), proc_name_address(proc));
   return 0;   // PROC_RETURNED
 }
 void topThread(void *, wait_result_t) {

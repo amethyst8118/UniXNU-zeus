@@ -1514,7 +1514,115 @@ int ustackFindOne(void *p, void *arg) {
   return 0;   // PROC_RETURNED
 }
 // The target: a pid, or a process name (MAXCOMLEN, 16 characters) looked up again whenever the pid it had is gone or renamed.
-struct UstackTarget {char name[20]; int pid; bool byName;};
+struct UstackTarget {char name[20]; int pid; bool byName, prof;};
+// zeus-ustack=+<target> (or zeus-uprof-ms=<ms> with zeus-ustack=<target>): a sampling profile instead of #ustack's snapshots (gpum69b had 39 running samples in
+// 260 s, too few to rank SpringBoard's swipe cost). Every <ms> (default 10, at least 2) the main thread (running or blocked) and every
+// other thread that last entered the kernel by an exception or interrupt (running or runnable user code) are sampled: pc and up to 11
+// return addresses, counted per distinct stack in a table. Every zeus-uprof-win ms (default 2000) the 15 most counted stacks go to
+// rows #up1..#up15 and the table starts again; row 0 (#uprof) has the window number (rows repeat when a log round comes before the
+// next window: keep one copy per number), the samples taken, how many of the main thread's were in user code vs in a system call,
+// the worker samples, the stacks dropped from a full table, and the pc of a thread in mach_msg2_trap (x16 -47) for the shared-cache
+// slide. A thread's saved state is the one of its last kernel entry: user code that never enters the kernel repeats its last point.
+constexpr unsigned kUprofFrames = 12, kUprofSlots = 1024, kUprofTop = 15;
+struct UprofEntry {uint64_t a[kUprofFrames]; uint32_t count; uint8_t main, sys;};
+void uprofLoop(UstackTarget *target, UstackRegs &r, unsigned ms) {
+  const uint64_t kUser = 0x0000000fffffffffULL;
+  static UprofEntry table[kUprofSlots];
+  unsigned window = 2000;
+  PE_parse_boot_argn("zeus-uprof-win", &window, sizeof window);
+  if (window < 500) window = 500;
+  unsigned seq = 0, samples = 0, mainUser = 0, mainSys = 0, workers = 0, dropped = 0;
+  uint64_t msg2Pc = 0, start = mach_absolute_time(), windowAbs = 0;
+  nanoseconds_to_absolutetime(static_cast<uint64_t>(window) * 1000000ULL, &windowAbs);
+  memset(table, 0, sizeof table);
+  for (;;) {
+    IOSleep(ms);
+    struct proc *p = target->pid ? proc_find(target->pid) : nullptr;
+    if (p && target->byName) {
+      const char *n = proc_name_address(p);
+      if (!n || strncmp(n, target->name, 16)) {proc_rele(p); p = nullptr;}
+    }
+    if (!p && target->byName) {
+      UstackFind f{target->name, 0};
+      proc_iterate(1 /* PROC_ALLPROCLIST */, ustackFindOne, &f, nullptr, nullptr);
+      target->pid = f.pid;
+      p = f.pid ? proc_find(f.pid) : nullptr;
+    }
+    if (p) {
+      task_t task = reinterpret_cast<task_t>(proc_task(p));
+      if (task) {
+        r.threads = 0;
+        task_act_iterate_wth_args(task, ustackOne, &r);
+        const unsigned n = r.threads < kUstackCapture ? r.threads : kUstackCapture;
+        vm_map_t map = get_task_map_reference(task);
+        ++samples;
+        for (unsigned i = 0; map && i < n; ++i) {
+          const UstackThread &u = r.all[i];
+          const bool sys = ustackInSyscall(u);
+          if (sys && u.x16 == static_cast<uint64_t>(-47LL) && !msg2Pc) msg2Pc = u.pc & kUser;
+          if (i && (sys || !u.pc)) continue;
+          if (!i) (sys ? mainSys : mainUser)++;
+          else ++workers;
+          UprofEntry e = {};
+          e.main = !i;
+          e.sys = sys;
+          e.a[0] = u.pc & kUser;
+          unsigned nf = 1;
+          uint64_t fp = u.fp & kUser;
+          while (fp && !(fp & 7) && nf < kUprofFrames) {
+            uint64_t pair[2] = {};
+            if (vm_map_read_user(map, fp, pair, sizeof pair) != KERN_SUCCESS) break;
+            e.a[nf++] = pair[1] & kUser;
+            const uint64_t next = pair[0] & kUser;
+            if (next <= fp) break;
+            fp = next;
+          }
+          uint64_t h = e.main * 7919 + e.sys;
+          for (unsigned k = 0; k < kUprofFrames; ++k) h = h * 1000003ULL ^ e.a[k];
+          unsigned slot = static_cast<unsigned>(h % kUprofSlots), probe = 0;
+          for (; probe < 64; ++probe, slot = (slot + 1) % kUprofSlots) {
+            UprofEntry &t = table[slot];
+            if (!t.count) {t = e; t.count = 1; break;}
+            if (t.main == e.main && t.sys == e.sys && !memcmp(t.a, e.a, sizeof e.a)) {++t.count; break;}
+          }
+          if (probe == 64) ++dropped;
+        }
+        if (map) vm_map_deallocate(map);
+      }
+      proc_rele(p);
+    }
+    if (mach_absolute_time() - start < windowAbs) continue;
+    // Publish: the window's most counted stacks, then start again.
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    static bool taken[kUprofSlots];
+    static char rows[kUprofTop][sizeof zeus_ustack_rows[0]];
+    memset(taken, 0, sizeof taken);
+    memset(rows, 0, sizeof rows);
+    for (unsigned t = 0; t < kUprofTop; ++t) {
+      unsigned best = kUprofSlots;
+      for (unsigned s = 0; s < kUprofSlots; ++s)
+        if (table[s].count && !taken[s] && (best == kUprofSlots || table[s].count > table[best].count)) best = s;
+      if (best == kUprofSlots) break;
+      taken[best] = true;
+      const UprofEntry &e = table[best];
+      int m = snprintf(rows[t], sizeof rows[t], "#up%u %u c%u %s |", t + 1, seq, e.count, e.main ? (e.sys ? "Ms" : "M") : "w");
+      for (unsigned k = 0; k < kUprofFrames && e.a[k] && m > 0 && m < int(sizeof rows[t]) - 12; ++k)
+        m += snprintf(rows[t] + m, sizeof rows[t] - m, " %llx", static_cast<unsigned long long>(e.a[k]));
+    }
+    char head[sizeof zeus_ustack_rows[0]];
+    snprintf(head, sizeof head, "#uprof %u %d %s up %llus samples %u main user %u sys %u workers %u dropped %u msg2pc %llx", seq,
+             target->pid, target->name, static_cast<unsigned long long>(ns / 1000000000ULL), samples, mainUser, mainSys, workers, dropped,
+             static_cast<unsigned long long>(msg2Pc));
+    strlcpy(zeus_ustack_rows[0], head, sizeof zeus_ustack_rows[0]);
+    for (unsigned t = 0; t < kUprofTop; ++t) strlcpy(zeus_ustack_rows[t + 1], rows[t], sizeof zeus_ustack_rows[t + 1]);
+    memset(table, 0, sizeof table);
+    ++seq;
+    samples = mainUser = mainSys = workers = dropped = 0;
+    msg2Pc = 0;
+    start = mach_absolute_time();
+  }
+}
 void ustackThread(void *arg, wait_result_t) {
   thread_set_thread_name(current_thread(), "zeus-ustack");
   UstackTarget *target = static_cast<UstackTarget *>(arg);
@@ -1522,6 +1630,12 @@ void ustackThread(void *arg, wait_result_t) {
   unsigned same = 0;
   uint64_t lastPcs = 0;
   static UstackRegs r;
+  unsigned uprofMs = 0;
+  if ((PE_parse_boot_argn("zeus-uprof-ms", &uprofMs, sizeof uprofMs) && uprofMs) || target->prof) {
+    if (!uprofMs) uprofMs = 10;
+    uprofLoop(target, r, uprofMs < 2 ? 2 : uprofMs);
+    return;
+  }
   // zeus-ustack-ms: the sampling interval (default 2000 ms; 10000 was enough for hangs, too coarse for where CPU time goes).
   unsigned interval = 2000;
   PE_parse_boot_argn("zeus-ustack-ms", &interval, sizeof interval);
@@ -1629,6 +1743,8 @@ void startUstack() {
     if ((c == args || c[-1] == ' ') && !strncmp(c, kKey, keyLen)) at = c + keyLen;
   if (!at) return;
   static UstackTarget target;
+  // A leading '+' asks for the sampling profile (uprofLoop) instead of snapshots: one byte of the 1000-byte command line.
+  if (*at == '+') {target.prof = true; ++at;}
   size_t len = 0;
   while (at[len] && at[len] != ' ') ++len;
   if (!len) return;

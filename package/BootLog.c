@@ -42,6 +42,9 @@ extern int native_ufs_log_sync(void) __attribute__((weak_import));
 extern volatile uint32_t zeus_gpu_dcvs[18] __attribute__((weak_import));
 extern volatile int32_t zeus_thermal[6] __attribute__((weak_import));
 extern char zeus_top_row[280] __attribute__((weak_import));
+// #kcost (patches/xnu-12377/zeus-kcost.patch): {calls, mach ticks, longest call since the last read, bytes} for user faults that
+// reach vm_fault, madvise and work_interval_ctl.
+extern uint64_t zeus_kcost[4][4] __attribute__((weak_import));
 extern char zeus_ustack_rows[16][200] __attribute__((weak_import));
 extern char zeus_ustack_fault[2][220] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
@@ -584,7 +587,7 @@ static uint64_t log_ticks(void) {uint64_t v; __asm__ volatile("isb\n\tmrs %0, cn
 // (zeusacm=1, tools/scripts/zeus_acm_log.py) carries them live; tools/scripts/zeus_live.py turns them into per-interval rates.
 static uint32_t log_live_on;
 static const char *const live_prefixes[] = {"#zgpu ", "#cpu gov", "#cpu throttle", "#top", "G commit", "H frame-", "RM ", "[gpu jobs]",
-                                            "[gpu recovery]", "#up"};   // #up: the #uprof profile rows (ZeusGpuProbe.cpp uprofLoop)
+                                            "[gpu recovery]", "#up", "#kcost"};   // #up: the #uprof profile rows (ZeusGpuProbe.cpp uprofLoop)
 static void live_row(const char *text, size_t n) {
   for (size_t i = 0; i < sizeof live_prefixes / sizeof live_prefixes[0]; ++i)
     if (!strncmp(text, live_prefixes[i], strlen(live_prefixes[i]))) {printf("@live %.*s\n", (int)n, text); return;}
@@ -1400,6 +1403,23 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // '#' rows pass every log group filter; a new [name] row is dropped by it (gpum34 and gpum35 had no [zeus gpu] row for that).
   if (&zeus_top_row && zeus_top_row[0]) at = put(out, at, cap, zeus_top_row, sizeof zeus_top_row);
+  // #kcost: running totals (calls, microseconds) and the longest call since the previous round (read and reset here), per kind.
+  if (&zeus_kcost) {
+    uint64_t us[3][3] = {{0}};
+    for (unsigned k = 0; k < 3; ++k) {
+      uint64_t ns = 0;
+      us[k][0] = __atomic_load_n(&zeus_kcost[k][0], __ATOMIC_RELAXED);
+      absolutetime_to_nanoseconds(__atomic_load_n(&zeus_kcost[k][1], __ATOMIC_RELAXED), &ns);
+      us[k][1] = ns / 1000;
+      absolutetime_to_nanoseconds(__atomic_exchange_n(&zeus_kcost[k][2], 0, __ATOMIC_RELAXED), &ns);
+      us[k][2] = ns / 1000;
+    }
+    char krow[260];
+    snprintf(krow, sizeof krow, "#kcost fault c=%llu t=%lluus m=%lluus | madvise c=%llu t=%lluus m=%lluus b=%lluK | wictl c=%llu t=%lluus m=%lluus",
+             us[0][0], us[0][1], us[0][2], us[1][0], us[1][1], us[1][2],
+             (unsigned long long)(__atomic_load_n(&zeus_kcost[1][3], __ATOMIC_RELAXED) >> 10), us[2][0], us[2][1], us[2][2]);
+    at = put(out, at, cap, krow, sizeof krow);
+  }
   if (&zeus_ustack_rows) for (unsigned i = 0; i < 16; ++i) if (zeus_ustack_rows[i][0]) at = put(out, at, cap, zeus_ustack_rows[i], sizeof zeus_ustack_rows[i]);
   if (&zeus_ustack_fault) for (unsigned i = 0; i < 2; ++i) if (zeus_ustack_fault[i][0]) at = put(out, at, cap, zeus_ustack_fault[i], sizeof zeus_ustack_fault[i]);
   // #zgpu: the clock governor and die temperatures (ZeusGpuProbe.cpp), then the display swaps accepted.

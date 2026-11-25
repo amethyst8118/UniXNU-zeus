@@ -1,0 +1,99 @@
+zeus #kcost: per-call cost counters for user faults (vm_fault), madvise() and work_interval_ctl(), read by the board log.
+
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -179,6 +179,8 @@
+ static void inspect_data_abort(uint32_t, fault_status_t *, vm_prot_t *);
+ 
+ static int is_vm_fault(fault_status_t);
++/* zeus #kcost (bsd/kern/sys_work_interval.c): count and time of the user faults that reach vm_fault(). */
++extern void zeus_kcost_note(unsigned kind, uint64_t ticks, uint64_t bytes);
+ static int is_translation_fault(fault_status_t);
+ static int is_alignment_fault(fault_status_t);
+ 
+@@ -1970,9 +1972,11 @@
+ 
+ 			{
+ 				/* We have to fault the page in */
++				const uint64_t zeus_kcost_t0 = mach_absolute_time();
+ 				result = vm_fault(map, vm_fault_addr, fault_type,
+ 				    /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_ABORTSAFE,
+ 				    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
++				zeus_kcost_note(0, mach_absolute_time() - zeus_kcost_t0, 0);
+ 			}
+ 		}
+ 		if (thread->t_rr_state.trr_fault_state != TRR_FAULT_NONE) {
+diff --git a/bsd/kern/kern_mman.c b/bsd/kern/kern_mman.c
+--- a/bsd/kern/kern_mman.c
++++ b/bsd/kern/kern_mman.c
+@@ -1383,8 +1383,21 @@
+ 	           user_map, VM_SANITIZE_FLAGS_SIZE_ZERO_FALLTHROUGH, start, end, size);
+ }
+ 
++/* zeus #kcost (bsd/kern/sys_work_interval.c): madvise() count, time and bytes, timed around the original body. */
++extern void zeus_kcost_note(unsigned kind, uint64_t ticks, uint64_t bytes);
++extern uint64_t mach_absolute_time(void);
++static int madvise_zeus_inner(proc_t p, struct madvise_args *uap, int32_t *retval);
+ int
+-madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
++madvise(proc_t p, struct madvise_args *uap, int32_t *retval)
++{
++	const uint64_t zeus_kcost_t0 = mach_absolute_time();
++	const int zeus_kcost_error = madvise_zeus_inner(p, uap, retval);
++	zeus_kcost_note(1, mach_absolute_time() - zeus_kcost_t0, uap->len);
++	return zeus_kcost_error;
++}
++
++static int
++madvise_zeus_inner(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
+ {
+ 	vm_map_t user_map;
+ 	mach_vm_offset_t start, end;
+diff --git a/bsd/kern/sys_work_interval.c b/bsd/kern/sys_work_interval.c
+--- a/bsd/kern/sys_work_interval.c
++++ b/bsd/kern/sys_work_interval.c
+@@ -54,8 +54,42 @@
+ 	    native_wi_count, proc_selfpid(), name, what, error, kret, flags, (int)task_is_app(current_task()));
+ }
+ 
++/*
++ * zeus #kcost: per-call cost counters, read by the board log (package/BootLog.c, the #kcost row). zeus_kcost[kind] = {calls,
++ * mach ticks, the longest call in ticks since the last read (the reader exchanges it with 0), bytes}. Kinds: 0 user faults that
++ * reach vm_fault() (osfmk/arm64/sleh.c handle_user_abort), 1 madvise(), 2 work_interval_ctl(). gpum74: SpringBoard took ~12,000
++ * soft faults a second while swiping and spent a fifth of its main thread's running samples in work_interval_ctl.
++ */
++extern uint64_t mach_absolute_time(void);
++uint64_t zeus_kcost[4][4];
++void zeus_kcost_note(unsigned kind, uint64_t ticks, uint64_t bytes);
++void
++zeus_kcost_note(unsigned kind, uint64_t ticks, uint64_t bytes)
++{
++	if (kind >= 4) {
++		return;
++	}
++	__atomic_fetch_add(&zeus_kcost[kind][0], 1, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&zeus_kcost[kind][1], ticks, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&zeus_kcost[kind][3], bytes, __ATOMIC_RELAXED);
++	uint64_t longest = __atomic_load_n(&zeus_kcost[kind][2], __ATOMIC_RELAXED);
++	while (ticks > longest &&
++	    !__atomic_compare_exchange_n(&zeus_kcost[kind][2], &longest, ticks, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
++	}
++}
++
++static int work_interval_ctl_zeus_inner(proc_t p, struct work_interval_ctl_args *uap, int32_t *retval);
+ int
+-work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
++work_interval_ctl(proc_t p, struct work_interval_ctl_args *uap, int32_t *retval)
++{
++	const uint64_t zeus_kcost_t0 = mach_absolute_time();
++	const int zeus_kcost_error = work_interval_ctl_zeus_inner(p, uap, retval);
++	zeus_kcost_note(2, mach_absolute_time() - zeus_kcost_t0, 0);
++	return zeus_kcost_error;
++}
++
++static int
++work_interval_ctl_zeus_inner(__unused proc_t p, struct work_interval_ctl_args *uap,
+     __unused int32_t *retval)
+ {
+ 	uint32_t        operation = uap->operation;

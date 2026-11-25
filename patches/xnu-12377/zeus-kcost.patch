@@ -41,7 +41,7 @@ diff --git a/bsd/kern/kern_mman.c b/bsd/kern/kern_mman.c
 +{
 +	const uint64_t zeus_kcost_t0 = mach_absolute_time();
 +	const int zeus_kcost_error = madvise_zeus_inner(p, uap, retval);
-+	zeus_kcost_note(1, mach_absolute_time() - zeus_kcost_t0, uap->len);
++	zeus_kcost_note(1, mach_absolute_time() - zeus_kcost_t0, VM_SANITIZE_UNSAFE_UNWRAP(uap->len));
 +	return zeus_kcost_error;
 +}
 +

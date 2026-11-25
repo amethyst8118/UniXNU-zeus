@@ -52,7 +52,11 @@ def main():
         # the daemon starts the way launchd already starts that job.
         drop = [label for label in os.environ.get('ZEUS_LAUNCHD_DROP', '').split(',') if label]
         replace = os.environ.get('ZEUS_LAUNCHD_REPLACE', '')
-        if drop or replace:
+        # ZEUS_LAUNCHD_ENV=label:NAME=VALUE[;label:NAME=VALUE...] sets EnvironmentVariables of OS jobs (every job of the label), e.g.
+        # libmalloc tunables for one process: gpum76 found SpringBoard advising ~800 MB/s with MADV_FREE_REUSABLE while swiping
+        # (xzone's large guard chunks: xzm_segment_group_update_guard_chunk -> madvise).
+        env = [item.split(':', 1) for item in os.environ.get('ZEUS_LAUNCHD_ENV', '').split(';') if item]
+        if drop or replace or env:
             cache = work / 'xpc/launchd.plist'
             merged = plistlib.loads(cache.read_bytes())
             jobs = merged['LaunchDaemons']
@@ -68,9 +72,16 @@ def main():
                     sys.exit('ZEUS_LAUNCHD_REPLACE: no single OS job ' + replace)
                 hosts[0].pop('Program', None)
                 hosts[0]['ProgramArguments'] = ['/usr/libexec/adrenoprobed']
+            for label, setting in env:
+                name, value = setting.split('=', 1)
+                targets = [job for job in jobs.values() if job.get('Label') == label]
+                if not targets:
+                    sys.exit('ZEUS_LAUNCHD_ENV: no OS job ' + label)
+                for job in targets:
+                    job.setdefault('EnvironmentVariables', {})[name] = value
             cache.write_bytes(plistlib.dumps(merged, fmt=plistlib.FMT_XML, sort_keys=False))
             subprocess.run(['plutil', '-convert', 'binary1', str(cache)], check=True)
-            print('launchd cache: dropped', gone, 'replaced', replace or '-')
+            print('launchd cache: dropped', gone, 'replaced', replace or '-', 'environment', env or '-')
         report.update(bbr.sign_launchd_cache(work / 'xpc/launchd.plist'))
         (work / 'libexec').mkdir()
         shutil.copy2(plugin / 'adrenoprobed', work / 'libexec/adrenoprobed')

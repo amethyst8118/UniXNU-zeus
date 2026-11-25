@@ -22,7 +22,9 @@
 //      Before sensing goes on, THP (touch host processing, raw frames for Xiaomi's HAL) is switched off as Xiaomi's
 //      fts_enable_thp_onoff(0) does: A0 00 00, C0 21 01, A0 00 01.
 #include <IOKit/IOLib.h>
+#include <kern/clock.h>
 #include <kern/thread.h>
+#include <mach/mach_time.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
 #include "BootResetCore.h"
@@ -483,26 +485,47 @@ void pinIn(unsigned n, unsigned pull, unsigned ma) {
 void pinSet(unsigned n, bool high) {pinRegs(n)[1] = high ? 2 : 0;}
 bool pinGet(unsigned n) {return pinRegs(n)[1] & 1;}
 
-// One transfer with CS low throughout: length bytes out (zeros without tx), as many in.
+// A wait of a few hundred nanoseconds on the counter. IODelay blocks the thread even for 1 us (assert_wait_deadline and thread_block: a
+// timer interrupt and two context switches; sheng TouchProbe.cpp, int-182), and a transfer waits twice per bit: 160 blocks for one 8-byte
+// event, 1-2 ms. While a finger moved (230-260 events/s) the report loop took 12-70 ms instead of 8, so iOS got 14-80 touch updates per
+// second (gpum81/82 '#touch s4').
+uint64_t spinCounter(void) {
+  uint64_t v;
+  __asm__ volatile("isb" ::: "memory");
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v));
+  return v;
+}
+void spinNs(uint32_t ns) {
+  static uint64_t ticksPerUs;
+  if (!ticksPerUs) {
+    uint64_t f;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+    ticksPerUs = f >= 1000000 ? f / 1000000 : 19;
+  }
+  const uint64_t start = spinCounter(), ticks = (ns * ticksPerUs + 999) / 1000;
+  while (spinCounter() - start < ticks) {}
+}
+
+// One transfer with CS low throughout: length bytes out (zeros without tx), as many in. 500 ns per half clock.
 void spiTransfer(const uint8_t *tx, uint8_t *rx, uint32_t length) {
   pinSet(PinCs, false);
-  IODelay(1);
+  spinNs(1000);
   for (uint32_t i = 0; i < length; ++i) {
     const uint8_t out = tx ? tx[i] : 0;
     uint8_t in = 0;
     for (int bit = 7; bit >= 0; --bit) {
       pinSet(PinMosi, out >> bit & 1);
-      IODelay(1);
+      spinNs(500);
       pinSet(PinClk, true);
-      IODelay(1);
+      spinNs(500);
       in = static_cast<uint8_t>(in << 1 | (pinGet(PinMiso) ? 1 : 0));
       pinSet(PinClk, false);
     }
     if (rx) rx[i] = in;
   }
-  IODelay(1);
+  spinNs(1000);
   pinSet(PinCs, true);
-  IODelay(10);
+  spinNs(10000);
 }
 
 // FTS framing (ST FTS v5.2.1 ftsIO.c / ftsHardware.h, SPI4 mode; as hakios-unicorn stfts.c).
@@ -562,9 +585,10 @@ bool ftsReset(uint8_t seen[4], unsigned *nSeen) {
 enum : uint8_t {EventEnter = 0x13, EventMotion = 0x23, EventLeave = 0x33};
 struct TouchStats {
   uint32_t polls, events, downs, moves, ups, readies, errors, lastId, lastX, lastY, minX, maxX, minY, maxY, intLow, forced;
+  uint32_t drainMax, drainSum, drains;   // microseconds of a drain with its report: longest, sum, count (since the last row)
   uint8_t lastRaw[8];
 };
-TouchStats gTouch = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xffffffffu, 0, 0xffffffffu, 0, 0, 0, {0}};
+TouchStats gTouch = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xffffffffu, 0, 0xffffffffu, 0, 0, 0, 0, 0, 0, {0}};
 uint8_t gFirstEvents[8][8];
 unsigned gFirstCount;
 
@@ -613,10 +637,11 @@ void ftsSenseOn(void) {
 
 void touchPublish(void) {
   snprintf(zeus_touch_rows[11], sizeof zeus_touch_rows[11],
-           "#touch s4 polls %u int-low %u forced %u events %u down %u move %u up %u ready %u err %u hid %u | last id %u x %u y %u | x %u..%u y %u..%u",
+           "#touch s4 polls %u int-low %u forced %u events %u down %u move %u up %u ready %u err %u hid %u drain %u/%uus | last id %u x %u y %u | x %u..%u y %u..%u",
            gTouch.polls, gTouch.intLow, gTouch.forced, gTouch.events, gTouch.downs, gTouch.moves, gTouch.ups, gTouch.readies, gTouch.errors,
-           native_touch_hid_reports, gTouch.lastId, gTouch.lastX, gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX,
+           native_touch_hid_reports, gTouch.drains ? gTouch.drainSum / gTouch.drains : 0, gTouch.drainMax, gTouch.lastId, gTouch.lastX, gTouch.lastY, gTouch.minX == 0xffffffffu ? 0 : gTouch.minX, gTouch.maxX,
            gTouch.minY == 0xffffffffu ? 0 : gTouch.minY, gTouch.maxY);
+  gTouch.drainMax = gTouch.drainSum = gTouch.drains = 0;
   // The first non-zero events after sensing went on, as raw bytes (row 8, free after stage 3b's pad row was read).
   char row[200];
   int k = snprintf(row, sizeof row, "#touch s4 first events");
@@ -660,15 +685,25 @@ void touchLoop(void *, wait_result_t) {
     const bool forced = !low && gTouch.polls % 10 == 0;
     if (forced) ++gTouch.forced;
     unsigned processed = 0;
+    const uint64_t begun = mach_absolute_time();
     for (unsigned i = 0; i < 32 && (low || forced); ++i) {
       uint8_t event[8];
       ftsReadEvent(event);
       if (!event[0]) break;
+      // A finger that goes down or up in the middle of a drain is its own report: what moved before it goes first.
+      if (processed && (event[0] == EventEnter || event[0] == EventLeave)) touchPublishHid();
       touchEvent(event);
       ++processed;
     }
-    if (processed) touchPublishHid();   // hand the current contact set to NativeHidInput, then wake it through the sink
-    if ((gTouch.polls & 31) == 0 || gTouch.events) touchPublish();
+    if (processed) {
+      touchPublishHid();   // hand the current contact set to NativeHidInput, then wake it through the sink
+      uint64_t ns = 0;
+      absolutetime_to_nanoseconds(mach_absolute_time() - begun, &ns);
+      const uint32_t us = static_cast<uint32_t>(ns / 1000);
+      gTouch.drainSum += us; ++gTouch.drains;
+      if (us > gTouch.drainMax) gTouch.drainMax = us;
+    }
+    if ((gTouch.polls & 63) == 0) touchPublish();   // the log row, every 0.5 s
     IOSleep(8);
   }
 }

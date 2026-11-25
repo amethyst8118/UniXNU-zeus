@@ -1515,7 +1515,7 @@ int ustackFindOne(void *p, void *arg) {
 }
 // The target: a pid, or a process name (MAXCOMLEN, 16 characters) looked up again whenever the pid it had is gone or renamed.
 struct UstackTarget {char name[20]; int pid; bool byName, prof;};
-// zeus-ustack=+<target> (or zeus-uprof-ms=<ms> with zeus-ustack=<target>): a sampling profile instead of #ustack's snapshots (gpum69b had 39 running samples in
+// zeus-ustack=:<target> (or zeus-uprof-ms=<ms> with zeus-ustack=<target>): a sampling profile instead of #ustack's snapshots (gpum69b had 39 running samples in
 // 260 s, too few to rank SpringBoard's swipe cost). Every <ms> (default 10, at least 2) the main thread (running or blocked) and every
 // other thread that last entered the kernel by an exception or interrupt (running or runnable user code) are sampled: pc and up to 11
 // return addresses, counted per distinct stack in a table. Every zeus-uprof-win ms (default 2000) the 15 most counted stacks go to
@@ -1743,8 +1743,9 @@ void startUstack() {
     if ((c == args || c[-1] == ' ') && !strncmp(c, kKey, keyLen)) at = c + keyLen;
   if (!at) return;
   static UstackTarget target;
-  // A leading '+' asks for the sampling profile (uprofLoop) instead of snapshots: one byte of the 1000-byte command line.
-  if (*at == '+') {target.prof = true; ++at;}
+  // A leading ':' asks for the sampling profile (uprofLoop) instead of snapshots: one byte of the 1000-byte command line ('+' is not
+  // allowed by UniXNU's payload.py check_args).
+  if (*at == ':' || *at == '+') {target.prof = true; ++at;}
   size_t len = 0;
   while (at[len] && at[len] != ' ') ++len;
   if (!len) return;

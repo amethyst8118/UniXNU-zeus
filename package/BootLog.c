@@ -584,7 +584,7 @@ static uint64_t log_ticks(void) {uint64_t v; __asm__ volatile("isb\n\tmrs %0, cn
 // (zeusacm=1, tools/scripts/zeus_acm_log.py) carries them live; tools/scripts/zeus_live.py turns them into per-interval rates.
 static uint32_t log_live_on;
 static const char *const live_prefixes[] = {"#zgpu ", "#cpu gov", "#cpu throttle", "#top", "G commit", "H frame-", "RM ", "[gpu jobs]",
-                                            "[gpu recovery]"};
+                                            "[gpu recovery]", "#up"};   // #up: the #uprof profile rows (ZeusGpuProbe.cpp uprofLoop)
 static void live_row(const char *text, size_t n) {
   for (size_t i = 0; i < sizeof live_prefixes / sizeof live_prefixes[0]; ++i)
     if (!strncmp(text, live_prefixes[i], strlen(live_prefixes[i]))) {printf("@live %.*s\n", (int)n, text); return;}

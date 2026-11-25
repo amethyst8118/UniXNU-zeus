@@ -75,6 +75,20 @@
       "evidence": "identical bytes to a reviewed function bound to _lck_mtx_gate_steal (carried 2026-11-21); callers: AppleImage4. Call-sequence alignment of its AppleImage4 callers with the same kexts in iPhone17,2 24A446 (iOS 27 zeus pairing): 1 aligned call(s) name _lck_mtx_gate_steal."
     },
     {
+      "original": "0xfffffff00a6d4b04",
+      "original_size": 12,
+      "original_sha256": "12c23b33c4362ab75b84ebe736e6e24be587c5759d006fe9431138d28464cc1b",
+      "native_symbol": "_ml_io_read32",
+      "evidence": "bti c; ldr w0,[x0]; ret, directly after _ml_io_read8 (ldrb) and _ml_io_read16 (ldrh) in the original, before the _ml_io_write family: osfmk machine_routines order. Automatic matching lost it in 6420cb1 (stubbed 7; callers AppleUSBXDCI, AppleUSBXHCI, IOPCIFamily, IOUSBHostFamily)."
+    },
+    {
+      "original": "0xfffffff00a6d4b10",
+      "original_size": 12,
+      "original_sha256": "b6097f63592b59ee64929c6a3d22c4fec17e20813d81e216b075edf8eb0280d1",
+      "native_symbol": "_ml_io_read64",
+      "evidence": "bti c; ldr x0,[x0]; ret, directly after _ml_io_read8 (ldrb) and _ml_io_read16 (ldrh) in the original, before the _ml_io_write family: osfmk machine_routines order. Automatic matching lost it in 6420cb1 (stubbed 7; callers AppleUSBXDCI, AppleUSBXHCI, IOPCIFamily, IOUSBHostFamily)."
+    },
+    {
       "original": "0xfffffff00a6f83f4",
       "original_size": 80,
       "original_sha256": "c2e5c486bfdcb340b958e63a80ae75ba87878fc22b0eb7f8c671cfe48f2ddfa3",

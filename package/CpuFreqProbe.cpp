@@ -11,6 +11,7 @@
 //   3  the same in every domain once it reads enabled, and the highest L3 level
 //   4  mode 3's L3 vote, and a governor for the domains (below)
 // Optional `cpufreq-cap=<MHz>`: mode 3 requests the highest non-turbo level at or below it (domains and L3).
+// Optional `cpufreq-cap-d2=<MHz>` (zeus): that cap for domain 2 (the X2) instead of cpufreq-cap.
 // Register layout is the qcom-cpufreq-hw "epss" data of the pinned mainline tree (reg_enable 0x0, reg_domain_state 0x20,
 // reg_dcvs_ctrl 0xb0, reg_freq_lut 0x100 with 4-byte rows, reg_perf_state 0x320, per-core perf_state rows +4*i for the
 // policy's other CPUs when dcvs_ctrl bit 0 is set); the three domain windows come from the cpufreq@17d91000 node of
@@ -98,7 +99,7 @@ struct Window {
 };
 Window gDomain[3], gL3;
 unsigned gMode;
-uint32_t gCapKHz;
+uint32_t gCapKHz, gCapD2KHz;
 IOLock *gLock;
 
 uint32_t rd32(uintptr_t base, uint32_t reg) {return *reinterpret_cast<volatile uint32_t *>(base + reg);}
@@ -108,9 +109,13 @@ void wr32(uintptr_t base, uint32_t reg, uint32_t value) {
 }
 uint32_t lutKHz(uint32_t row) {return (row >> 30) ? kXoKHz * (row & 0xff) : kGpllHalfKHz;}
 
+// cpufreq-cap-d2 replaces cpufreq-cap for domain 2 (the X2) only.
+uint32_t capFor(uintptr_t va) {return gCapD2KHz && gDomain[2].va && va == gDomain[2].va ? gCapD2KHz : gCapKHz;}
+
 // Highest non-turbo LUT level (at or below the cap when one is set); the table ends at two equal frequencies.
 int pickLevel(uintptr_t va, bool turboMatters, uint32_t *khzOut, unsigned *rowsOut) {
     int best = -1; uint32_t bestKHz = 0, prev = 0; unsigned rows = 0;
+    const uint32_t cap = capFor(va);
     for (unsigned i = 0; i < kLutEntries; ++i) {
         uint32_t row = rd32(va, kRegFreqLut + i * 4);
         uint32_t khz = lutKHz(row);
@@ -118,7 +123,7 @@ int pickLevel(uintptr_t va, bool turboMatters, uint32_t *khzOut, unsigned *rowsO
         rows = i + 1;
         prev = khz;
         if (turboMatters && ((row >> 16) & 7) == 1) continue;
-        if (gCapKHz && khz > gCapKHz) continue;
+        if (cap && khz > cap) continue;
         if (khz >= bestKHz) {best = (int)i; bestKHz = khz;}
     }
     if (khzOut) *khzOut = bestKHz;
@@ -197,11 +202,12 @@ void buildLevels(unsigned d) {
     Levels &l = gLevels[d];
     l.count = 0;
     uint32_t prev = 0;
+    const uint32_t cap = capFor(gDomain[d].va);
     for (unsigned i = 0; i < kLutEntries; ++i) {
         const uint32_t row = rd32(gDomain[d].va, kRegFreqLut + i * 4), khz = lutKHz(row);
         if (i > 0 && khz == prev) break;
         prev = khz;
-        if (((row >> 16) & 7) == 1 || (gCapKHz && khz > gCapKHz)) continue;
+        if (((row >> 16) & 7) == 1 || (cap && khz > cap)) continue;
         unsigned at = l.count;
         while (at > 0 && l.khz[at - 1] > khz) {l.khz[at] = l.khz[at - 1]; l.index[at] = l.index[at - 1]; --at;}
         l.khz[at] = khz; l.index[at] = (uint8_t)i; ++l.count;
@@ -378,9 +384,10 @@ void pollThread(void *, wait_result_t) {
 }
 
 extern "C" void sheng_cpufreq_probe(void) {
-    unsigned mode = 0, capMHz = 0, minMHz = 0, boostMs = 1000, frameMs = 300, framePct = 60;
+    unsigned mode = 0, capMHz = 0, minMHz = 0, capD2MHz = 0, boostMs = 1000, frameMs = 300, framePct = 60;
     PE_parse_boot_argn("cpufreq", &mode, sizeof(mode));
     PE_parse_boot_argn("cpufreq-cap", &capMHz, sizeof(capMHz));
+    PE_parse_boot_argn("cpufreq-cap-d2", &capD2MHz, sizeof(capD2MHz));
     PE_parse_boot_argn("cpufreq-min", &minMHz, sizeof(minMHz));
     PE_parse_boot_argn("cpufreq-boost-ms", &boostMs, sizeof(boostMs));
     PE_parse_boot_argn("cpufreq-frame-ms", &frameMs, sizeof(frameMs));
@@ -394,6 +401,7 @@ extern "C" void sheng_cpufreq_probe(void) {
     if (!gLock) return;
     native_cpufreq_stage = 1;
     gCapKHz = capMHz * 1000;
+    gCapD2KHz = capD2MHz * 1000;
     for (unsigned d = 0; d < 3; ++d) mapWindow(gDomain[d], kDomainBase[d]);
     if (mode >= 3) mapWindow(gL3, kL3Base);
     gMode = mode;

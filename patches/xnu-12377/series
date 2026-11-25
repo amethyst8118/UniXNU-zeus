@@ -19,3 +19,4 @@ zeus-getattrlist-diag.patch
 uke-idle-timer-rearm.patch
 zzzzzzzzzzz-sheng-edge-matrix.patch
 zeus-kcost.patch
+zeus-bind-enc.patch

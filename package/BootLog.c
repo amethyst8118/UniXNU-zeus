@@ -44,7 +44,11 @@ extern volatile int32_t zeus_thermal[6] __attribute__((weak_import));
 extern char zeus_top_row[280] __attribute__((weak_import));
 // #kcost (patches/xnu-12377/zeus-kcost.patch): {calls, mach ticks, longest call since the last read, bytes} for user faults that
 // reach vm_fault, madvise and work_interval_ctl.
-extern uint64_t zeus_kcost[4][4] __attribute__((weak_import));
+extern uint64_t zeus_kcost[8][4] __attribute__((weak_import));
+// By fault type {calls, ticks}, by madvise advice {calls, ticks, bytes}, by madvise caller {pid + 1, calls, bytes} (cleared per round).
+extern uint64_t zeus_kcost_ftype[16][2] __attribute__((weak_import));
+extern uint64_t zeus_kcost_madv[16][3] __attribute__((weak_import));
+extern uint64_t zeus_kcost_mpid[32][3] __attribute__((weak_import));
 extern char zeus_ustack_rows[16][200] __attribute__((weak_import));
 extern char zeus_ustack_fault[2][220] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
@@ -1405,8 +1409,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&zeus_top_row && zeus_top_row[0]) at = put(out, at, cap, zeus_top_row, sizeof zeus_top_row);
   // #kcost: running totals (calls, microseconds) and the longest call since the previous round (read and reset here), per kind.
   if (&zeus_kcost) {
-    uint64_t us[3][3] = {{0}};
-    for (unsigned k = 0; k < 3; ++k) {
+    uint64_t us[4][3] = {{0}};
+    for (unsigned k = 0; k < 4; ++k) {
       uint64_t ns = 0;
       us[k][0] = __atomic_load_n(&zeus_kcost[k][0], __ATOMIC_RELAXED);
       absolutetime_to_nanoseconds(__atomic_load_n(&zeus_kcost[k][1], __ATOMIC_RELAXED), &ns);
@@ -1414,11 +1418,59 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       absolutetime_to_nanoseconds(__atomic_exchange_n(&zeus_kcost[k][2], 0, __ATOMIC_RELAXED), &ns);
       us[k][2] = ns / 1000;
     }
-    char krow[260];
-    snprintf(krow, sizeof krow, "#kcost fault c=%llu t=%lluus m=%lluus | madvise c=%llu t=%lluus m=%lluus b=%lluK | wictl c=%llu t=%lluus m=%lluus",
+    char krow[300];
+    snprintf(krow, sizeof krow, "#kcost fault c=%llu t=%lluus m=%lluus | madvise c=%llu t=%lluus m=%lluus b=%lluK | wictl c=%llu t=%lluus m=%lluus"
+             " | deact c=%llu t=%lluus m=%lluus b=%lluK",
              us[0][0], us[0][1], us[0][2], us[1][0], us[1][1], us[1][2],
-             (unsigned long long)(__atomic_load_n(&zeus_kcost[1][3], __ATOMIC_RELAXED) >> 10), us[2][0], us[2][1], us[2][2]);
+             (unsigned long long)(__atomic_load_n(&zeus_kcost[1][3], __ATOMIC_RELAXED) >> 10), us[2][0], us[2][1], us[2][2],
+             us[3][0], us[3][1], us[3][2], (unsigned long long)(__atomic_load_n(&zeus_kcost[3][3], __ATOMIC_RELAXED) >> 10));
     at = put(out, at, cap, krow, sizeof krow);
+  }
+  // #kcostf: user faults by kdebug type (running totals: calls/microseconds); #kcostm: madvise by advice (calls/us/KB, totals), then
+  // this round's biggest callers by bytes (pid:name calls/KB; the slots are cleared here).
+  if (&zeus_kcost_ftype) {
+    static const char *const kTypes[16] = {"0", "zf", "pin", "cow", "hit", "5", "guard", "pinv", "pind", "cmp", "swp", "11", "12", "13", "14", "15"};
+    char frow[300];
+    size_t n = (size_t)snprintf(frow, sizeof frow, "#kcostf");
+    for (unsigned t = 0; t < 16 && n < sizeof frow - 40; ++t) {
+      const uint64_t c = __atomic_load_n(&zeus_kcost_ftype[t][0], __ATOMIC_RELAXED);
+      if (!c) continue;
+      uint64_t ns = 0;
+      absolutetime_to_nanoseconds(__atomic_load_n(&zeus_kcost_ftype[t][1], __ATOMIC_RELAXED), &ns);
+      n += (size_t)snprintf(frow + n, sizeof frow - n, " %s=%llu/%llu", kTypes[t], (unsigned long long)c, (unsigned long long)(ns / 1000));
+    }
+    at = put(out, at, cap, frow, sizeof frow);
+  }
+  if (&zeus_kcost_madv && &zeus_kcost_mpid) {
+    char mrow[300];
+    size_t n = (size_t)snprintf(mrow, sizeof mrow, "#kcostm");
+    for (unsigned a = 0; a < 16 && n < sizeof mrow - 50; ++a) {
+      const uint64_t c = __atomic_load_n(&zeus_kcost_madv[a][0], __ATOMIC_RELAXED);
+      if (!c) continue;
+      uint64_t ns = 0;
+      absolutetime_to_nanoseconds(__atomic_load_n(&zeus_kcost_madv[a][1], __ATOMIC_RELAXED), &ns);
+      n += (size_t)snprintf(mrow + n, sizeof mrow - n, " a%u=%llu/%llu/%lluK", a, (unsigned long long)c, (unsigned long long)(ns / 1000),
+                            (unsigned long long)(__atomic_load_n(&zeus_kcost_madv[a][2], __ATOMIC_RELAXED) >> 10));
+    }
+    uint64_t slot[32][3];
+    for (unsigned s = 0; s < 32; ++s) {
+      slot[s][0] = __atomic_exchange_n(&zeus_kcost_mpid[s][0], 0, __ATOMIC_RELAXED);
+      slot[s][1] = __atomic_exchange_n(&zeus_kcost_mpid[s][1], 0, __ATOMIC_RELAXED);
+      slot[s][2] = __atomic_exchange_n(&zeus_kcost_mpid[s][2], 0, __ATOMIC_RELAXED);
+    }
+    n += (size_t)snprintf(mrow + n, sizeof mrow - n, " |");
+    for (unsigned k = 0; k < 4 && n < sizeof mrow - 50; ++k) {
+      unsigned best = 32;
+      for (unsigned s = 0; s < 32; ++s)
+        if (slot[s][0] && (best == 32 || slot[s][2] > slot[best][2])) best = s;
+      if (best == 32) break;
+      char name[20] = "?";
+      proc_name((int)(slot[best][0] - 1), name, sizeof name);
+      n += (size_t)snprintf(mrow + n, sizeof mrow - n, " %d:%s %llu/%lluK", (int)(slot[best][0] - 1), name,
+                            (unsigned long long)slot[best][1], (unsigned long long)(slot[best][2] >> 10));
+      slot[best][0] = 0;
+    }
+    at = put(out, at, cap, mrow, sizeof mrow);
   }
   if (&zeus_ustack_rows) for (unsigned i = 0; i < 16; ++i) if (zeus_ustack_rows[i][0]) at = put(out, at, cap, zeus_ustack_rows[i], sizeof zeus_ustack_rows[i]);
   if (&zeus_ustack_fault) for (unsigned i = 0; i < 2; ++i) if (zeus_ustack_fault[i][0]) at = put(out, at, cap, zeus_ustack_fault[i], sizeof zeus_ustack_fault[i]);
